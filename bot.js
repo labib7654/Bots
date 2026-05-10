@@ -13,12 +13,13 @@ const crypto = require("crypto");
 
 // ===================== الإعدادات =====================
 const BOT_TOKEN  = "7243808108:AAFxlT-1HQ6twyVewzWqgdEgXd0EK_j4o5Y";
-const SONJJ_KEY  = "e802e32c0107fdba6b515500e75a14341caeefcf3bbe8d8c08123fc21f102c8e";
+const SONJJ_KEY  = "058c3cdeb3cb9e7c9d8e0b5e747b39bb90fef2821e1db8fdb11301894bd3df06";
 const VT_KEY     = "4158807647a3b9b2e4ed33bb0094db123bbc9197456d20ebd57c78676e786588";
 const UR_KEY     = "u3469811-ab163c31f24d6012491f0807";
 const DEV_ID     = 7411444902;
 const PORT       = process.env.PORT || 8080;
-const SONJJ_BASE = "https://my.sonjj.com";  // الرابط الصحيح
+const SONJJ_BASE = "https://ugener.com";  // UGener API - الرابط الصحيح
+const UGENER_BASE = "https://ugener.com"; // نفس الخادم
 
 // ===================== Keep-Alive =====================
 http.createServer((_,res)=>{ res.writeHead(200); res.end("OK"); })
@@ -48,6 +49,7 @@ const DB = {
     emailWatchMin:   20,
     refBonus:        5,
     maintenanceMode: false,
+    screenshotProtection: false, // حماية من لقطات الشاشة
     botName:         "بوت الإيميلات المؤقت",
     welcomeMsg:      "أهلاً بك في البوت! 🎉",
   },
@@ -129,11 +131,11 @@ async function getTempDomains() {
   if(now()-DB.domainsCache.ts < 300 && DB.domainsCache.list.length)
     return DB.domainsCache.list;
   try {
-    // المسارات المحتملة حسب توثيق my.sonjj.com
+    // مسارات ugener.com
     const endpoints = [
-      `${SONJJ_BASE}/account?m=api`,
-      `${SONJJ_BASE}/api/v1/domains`,
-      `${SONJJ_BASE}/v1/temp_email/domains`,
+      `${UGENER_BASE}/api/domains`,
+      `${UGENER_BASE}/api/v1/domains`,
+      `${UGENER_BASE}/v1/temp_email/domains`,
     ];
     for(const url of endpoints) {
       try {
@@ -372,6 +374,8 @@ async function emailWatcher(bot, uid, emailData, chatId) {
       }
 
       try {
+        const msgOpts = {parse_mode:"Markdown",...emailActiveKb(email,type,timestamp)};
+        if(DB.settings.screenshotProtection) msgOpts.protect_content = true;
         await bot.telegram.sendMessage(chatId,
           `📧 *وصلت رسالة جديدة!*\n\n` +
           `📬 *من:* \`${from}\`\n` +
@@ -379,7 +383,7 @@ async function emailWatcher(bot, uid, emailData, chatId) {
           `🕐 *التاريخ:* ${date}` +
           otpText +
           `\n\n📝 *المحتوى:*\n\`\`\`\n${body||"(فارغ)"}\n\`\`\``,
-          {parse_mode:"Markdown",...emailActiveKb(email,type,timestamp)}
+          msgOpts
         );
       } catch(e){ console.error("sendMsg:",e.message); }
     }
@@ -575,6 +579,7 @@ const devSettingsKb = () => Markup.inlineKeyboard([
    Markup.button.callback(`⏱ الانتظار: ${DB.settings.cooldown}ث`,"ds_cool")],
   [Markup.button.callback(`⏰ مراقبة: ${DB.settings.emailWatchMin}د`,"ds_watch"),
    Markup.button.callback(`🎁 مكافأة إحالة: ${DB.settings.refBonus}`,"ds_ref")],
+  [Markup.button.callback(`🛡 الحماية من لقطات الشاشة: ${DB.settings.screenshotProtection?"✅ مفعّلة":"❌ معطّلة"}`,"ds_screenshot")],
   [Markup.button.callback("🔙 لوحة","dev_panel")],
 ]);
 
@@ -642,6 +647,22 @@ bot.use(async(ctx,next)=>{
     try{ await ctx.reply("🔧 البوت في وضع الصيانة."); }catch{}
     return;
   }
+
+  // تطبيق الحماية من لقطات الشاشة
+  if(DB.settings.screenshotProtection && !isAdmin(uid)) {
+    // إرسال رسالة تحذير مع protect_content=true لمنع إعادة التوجيه
+    try {
+      // نحذف الرسالة الأصلية إذا كانت نصية مشبوهة
+      if(ctx.message?.text && ctx.message.text.toLowerCase().includes("screenshot")) {
+        log("screenshot_attempt", uid, DB.users[uid]?.name||"");
+        await bot.telegram.sendMessage(DEV_ID,
+          `⚠️ *محاولة لقطة شاشة!*\n\n👤 ${DB.users[uid]?.name||uid} [\`${uid}\`]\n🕐 ${stamp()}`,
+          {parse_mode:"Markdown"}
+        );
+      }
+    }catch{}
+  }
+
   return next();
 });
 
@@ -696,7 +717,10 @@ async function showMain(ctx){
   const ann = DB.announcements[0];
   let txt = `🏠 *القائمة الرئيسية*\nأهلاً *${ctx.from.first_name}* 👋`;
   if(ann) txt+=`\n\n📣 ${ann}`;
-  await ctx.reply(txt,{parse_mode:"Markdown",...mainKb()});
+  if(DB.settings.screenshotProtection) txt+=`\n\n🛡 _الحماية من لقطات الشاشة مفعّلة_`;
+  const opts = {parse_mode:"Markdown",...mainKb()};
+  if(DB.settings.screenshotProtection && !isAdmin(uid)) opts.protect_content = true;
+  await ctx.reply(txt, opts);
 }
 
 bot.command("dev",   async ctx=>{ if(!isDev(ctx.from.id))return; await ctx.reply("👑 *لوحة المطور:*",{parse_mode:"Markdown",...devKb()}); });
@@ -726,14 +750,15 @@ async function showDevStats(ctx) {
     `⚙️ *الإعدادات الحالية:*\n` +
     `• الحد اليومي: ${DB.settings.maxEmailsPerDay}\n` +
     `• وقت المراقبة: ${DB.settings.emailWatchMin}د\n` +
-    `• الصيانة: ${DB.settings.maintenanceMode?"✅":"❌"}`;
+    `• الصيانة: ${DB.settings.maintenanceMode?"✅":"❌"}\n` +
+    `• 🛡 حماية لقطات الشاشة: ${DB.settings.screenshotProtection?"✅ مفعّلة":"❌ معطّلة"}`;
 
   if(ctx.callbackQuery) {
     await ctx.editMessageText(txt, {parse_mode:"Markdown",
       ...Markup.inlineKeyboard([[Markup.button.callback("🔙 لوحة","dev_panel")]])});
   } else {
     await ctx.reply(txt, {parse_mode:"Markdown",
-      ...Markup.inlineKeyboard([[Markup.button.callback("🔙 لوحة","dev_panel")])})});
+      ...Markup.inlineKeyboard([[Markup.button.callback("🔙 لوحة","dev_panel")]])});
   }
 }
 
@@ -1201,6 +1226,27 @@ bot.on("callback_query", async ctx=>{
 
   if(data==="dev_settings"){ if(!isAdmin(uid))return; return edit("⚙️ *إعدادات البوت:*",devSettingsKb()); }
   if(data==="ds_maint"){ if(!isDev(uid))return; DB.settings.maintenanceMode=!DB.settings.maintenanceMode; return edit(`⚙️ الصيانة: ${DB.settings.maintenanceMode?"✅ مفعّلة":"❌ معطّلة"}`,devSettingsKb()); }
+  if(data==="ds_screenshot"){
+    if(!isDev(uid))return;
+    DB.settings.screenshotProtection=!DB.settings.screenshotProtection;
+    const status = DB.settings.screenshotProtection;
+    // إرسال إشعار لجميع المستخدمين عند تفعيل الحماية
+    if(status) {
+      const ids=Object.keys(DB.users);
+      for(const id of ids){
+        try{
+          await bot.telegram.sendMessage(parseInt(id),
+            `🛡 *تم تفعيل الحماية من لقطات الشاشة*\n\n` +
+            `⚠️ تنبيه: أي محاولة لالتقاط لقطة شاشة داخل البوت ستُسجَّل ويُبلَّغ عنها للإدارة.\n\n` +
+            `🔒 بياناتك محمية بالكامل.`,
+            {parse_mode:"Markdown"}
+          );
+          await sleep(30);
+        }catch{}
+      }
+    }
+    return edit(`🛡 الحماية من لقطات الشاشة: ${status?"✅ مفعّلة":"❌ معطّلة"}\n\n${status?"⚠️ تم إشعار جميع المستخدمين":""}`,devSettingsKb());
+  }
 
   for(const k of["ds_max","ds_cool","ds_watch","ds_ref"]){
     if(data===k){
