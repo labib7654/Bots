@@ -87,8 +87,6 @@ const defaultDB = {
   groupBadwords:  {}, // كلمات إساءة لكل قروب
   adminActionLog: {}, // سجل تصرفات المشرفين
   aiConversations:{}, // محادثات AI لكل مستخدم
-  muteSchedules:  {}, // جدولة كتم/فك كتم جماعي
-  groupOwnerPanel:{}, // إعدادات لوحة المالك
   settings: {
     maxEmailsPerDay:      30,
     cooldown:             8,
@@ -179,38 +177,22 @@ function genAccountEmail(){
 
 // ===================== MailSlurp =====================
 async function msCreateInbox(expiresInMinutes=25) {
-  for(let attempt=1;attempt<=3;attempt++){
-    try {
-      const expiresAt=new Date(Date.now()+expiresInMinutes*60*1000).toISOString();
-      const r=await axios.post(`${MS_BASE}/inboxes`,
-        {expiresAt,useDomainPool:true,isPublic:false,inboxType:"HTTP_INBOX"},
-        {headers:msHeaders,timeout:20000});
-      if(!r.data?.emailAddress||!r.data?.id){
-        console.error(`msCreateInbox attempt ${attempt}: missing data`,r.data);
-        continue;
-      }
-      return {email:r.data.emailAddress,inboxId:r.data.id,expiresAt:r.data.expiresAt};
-    } catch(e){
-      console.error(`msCreateInbox attempt ${attempt}:`,e.response?.status,e.message);
-      if(e.response?.status===401) return null; // مفتاح خاطئ — لا فائدة من إعادة المحاولة
-      if(attempt<3) await sleep(2000);
-    }
-  }
-  return null;
+  try {
+    const expiresAt=new Date(Date.now()+expiresInMinutes*60*1000).toISOString();
+    const r=await axios.post(`${MS_BASE}/inboxes`,{expiresAt,useDomainPool:true,isPublic:false},
+      {headers:msHeaders,timeout:15000});
+    return {email:r.data.emailAddress,inboxId:r.data.id,expiresAt:r.data.expiresAt};
+  } catch(e){ console.error("msCreateInbox:",e.response?.status,e.message); return null; }
 }
 
 async function msGetEmails(inboxId,since) {
   try {
-    const params={inboxId,size:20,sort:"DESC",unreadOnly:false};
+    const params={inboxId,size:20,sort:"DESC"};
     if(since) params.since=since;
-    const r=await axios.get(`${MS_BASE}/emails`,{headers:msHeaders,params,timeout:15000});
-    // MailSlurp يعيد { content: [...] } أو مصفوفة مباشرة
-    const content=r.data?.content??r.data;
+    const r=await axios.get(`${MS_BASE}/emails`,{headers:msHeaders,params,timeout:10000});
+    const content=r.data?.content||r.data||[];
     return Array.isArray(content)?content:[];
-  } catch(e){
-    console.error("msGetEmails:",e.response?.status,e.message);
-    return [];
-  }
+  } catch(e){ return []; }
 }
 
 async function msGetEmail(emailId) {
@@ -291,57 +273,31 @@ async function emailWatcher(bot,uid,emailData,chatId) {
 // ===================== AI (DeepSeek) =====================
 async function aiChat(uid, userMessage) {
   if(!DB.aiConversations[uid]) DB.aiConversations[uid]=[];
+  // محادثة واحدة فقط — لا تتراكم المحادثات
   DB.aiConversations[uid].push({role:"user",content:userMessage});
-
-  const messages=[
-    {role:"system",content:"أنت مساعد ذكي خبير ومتعدد المهارات. أجب باللغة العربية بشكل مختصر ومفيد. أنت مساعد AI متقدم."},
-    ...DB.aiConversations[uid].slice(-10)
-  ];
 
   try {
     const r=await axios.post(`${AI_BASE}/chat/completions`,{
       model: AI_MODEL,
-      messages,
+      messages: [
+        {role:"system",content:"أنت مساعد ذكي خبير ومتعدد المهارات. أجب باللغة العربية بشكل مختصر ومفيد. أنت مساعد AI متقدم."},
+        ...DB.aiConversations[uid].slice(-10) // آخر 10 رسائل فقط
+      ],
       max_tokens: 2000,
       temperature: 0.7,
       stream: false,
     },{
-      headers:{
-        "Authorization":`Bearer ${AI_KEY}`,
-        "Content-Type":"application/json",
-        "Accept":"application/json",
-      },
+      headers:{"Authorization":`Bearer ${AI_KEY}`,"Content-Type":"application/json"},
       timeout:60000,
-      validateStatus: s=>s<500,
     });
 
-    if(r.status===401||r.status===403){
-      console.error("AI auth error:",r.status,r.data);
-      DB.aiConversations[uid].pop(); // أزل رسالة المستخدم الفاشلة
-      return "❌ مفتاح الذكاء الاصطناعي غير صالح. يرجى التواصل مع المطور.";
-    }
-    if(r.status===429){
-      DB.aiConversations[uid].pop();
-      return "⏳ تم تجاوز حد الطلبات، انتظر قليلاً ثم حاول مجدداً.";
-    }
-    if(!r.data?.choices?.length){
-      console.error("AI empty response:",JSON.stringify(r.data));
-      DB.aiConversations[uid].pop();
-      return "❌ لم أتلقَّ رداً من الذكاء الاصطناعي. حاول مجدداً.";
-    }
-
-    const reply=r.data.choices[0].message?.content?.trim()||"لم أتمكن من الرد.";
+    const reply=r.data?.choices?.[0]?.message?.content||"لم أتمكن من الرد.";
     DB.aiConversations[uid].push({role:"assistant",content:reply});
+    // حفظ آخر 20 رسالة فقط
     if(DB.aiConversations[uid].length>20) DB.aiConversations[uid]=DB.aiConversations[uid].slice(-20);
     return reply;
   } catch(e){
-    DB.aiConversations[uid].pop(); // أزل رسالة المستخدم الفاشلة
-    const status=e.response?.status;
-    const errData=e.response?.data;
-    console.error("AI error:",status,errData||e.message);
-    if(status===401||status===403) return "❌ مفتاح الذكاء الاصطناعي غير صالح.";
-    if(status===429) return "⏳ تم تجاوز حد الطلبات، حاول بعد قليل.";
-    if(e.code==="ECONNABORTED"||e.code==="ETIMEDOUT") return "⏱ انتهت مهلة الاتصال بالذكاء الاصطناعي. حاول مجدداً.";
+    console.error("AI error:",e.response?.data||e.message);
     return "❌ خطأ في الاتصال بالذكاء الاصطناعي. حاول مجدداً.";
   }
 }
@@ -427,241 +383,7 @@ async function vtGetAnalysis(id) {
   return null;
 }
 
-// ===================== نظام تتبع عضوية القروبات =====================
-
-// جلب رتبة شخص من Telegram مباشرة (التحقق الحقيقي)
-async function getTelegramMemberStatus(gid, uid) {
-  try {
-    const member = await bot.telegram.getChatMember(gid, uid);
-    return member; // { status, user, can_delete_messages, ... }
-  } catch(e) {
-    return null;
-  }
-}
-
-// تحديث رتبة شخص في قروب معين من Telegram
-async function syncMemberRole(gid, uid) {
-  const member = await getTelegramMemberStatus(gid, uid);
-  if(!member) return null;
-  if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
-  const status = member.status; // creator/administrator/member/restricted/left/kicked
-  const existing = DB.groupMembers[gid][uid]||{};
-  DB.groupMembers[gid][uid] = {
-    ...existing,
-    id: uid,
-    name: member.user.first_name||existing.name||String(uid),
-    username: member.user.username||existing.username||"",
-    status,
-    isAdmin: status==="administrator"||status==="creator",
-    isOwner: status==="creator",
-    adminPerms: status==="administrator"?{
-      can_manage_chat: member.can_manage_chat||false,
-      can_delete_messages: member.can_delete_messages||false,
-      can_restrict_members: member.can_restrict_members||false,
-      can_promote_members: member.can_promote_members||false,
-      can_change_info: member.can_change_info||false,
-      can_invite_users: member.can_invite_users||false,
-      can_pin_messages: member.can_pin_messages||false,
-      can_post_messages: member.can_post_messages||false,
-      is_anonymous: member.is_anonymous||false,
-    }:null,
-    customTitle: member.custom_title||null,
-    lastSync: stamp(),
-  };
-  return DB.groupMembers[gid][uid];
-}
-
-// جلب كل قروبات مستخدم معين مع رتبته فيها
-function getUserGroupsInfo(uid) {
-  const result=[];
-  for(const [gid,g] of Object.entries(DB.groups)){
-    const memberData = DB.groupMembers[gid]?.[uid];
-    if(memberData && memberData.status!=="left" && memberData.status!=="kicked"){
-      result.push({
-        gid,
-        title: g.title||"قروب",
-        status: memberData.status,
-        isAdmin: memberData.isAdmin||false,
-        isOwner: memberData.isOwner||false,
-        adminPerms: memberData.adminPerms||null,
-        customTitle: memberData.customTitle||null,
-        joinedAt: memberData.joinedAt||"—",
-      });
-    }
-  }
-  return result;
-}
-
-// نص وصف رتبة شخص
-function describeRole(memberData) {
-  if(!memberData) return "غير عضو";
-  const s=memberData.status;
-  if(s==="creator") return "👑 مالك القروب";
-  if(s==="administrator"){
-    const p=memberData.adminPerms||{};
-    const parts=[];
-    if(p.can_delete_messages) parts.push("حذف رسائل");
-    if(p.can_restrict_members) parts.push("تقييد أعضاء");
-    if(p.can_promote_members) parts.push("ترقية مشرفين");
-    if(p.can_pin_messages) parts.push("تثبيت رسائل");
-    if(p.can_invite_users) parts.push("دعوة أعضاء");
-    if(p.can_manage_chat) parts.push("إدارة القروب");
-    if(p.is_anonymous) parts.push("مجهول الهوية");
-    const title=memberData.customTitle?` "${memberData.customTitle}"`:"";
-    return `⭐ مشرف${title}${parts.length?`\n   📋 صلاحيات: ${parts.join(", ")}`:"\n   📋 بلا صلاحيات إضافية"}`;
-  }
-  if(s==="member") return "👤 عضو عادي";
-  if(s==="restricted") return "⚠️ مقيّد";
-  if(s==="left") return "🚶 غادر";
-  if(s==="kicked") return "🚫 مطرود";
-  return s;
-}
-
-// تحديث قائمة أعضاء القروب الكاملة من Telegram
-async function syncGroupAdmins(gid) {
-  try {
-    const admins = await bot.telegram.getChatAdministrators(gid);
-    if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
-    for(const m of admins){
-      const uid=m.user.id;
-      const existing=DB.groupMembers[gid][uid]||{};
-      DB.groupMembers[gid][uid]={
-        ...existing,
-        id:uid,
-        name:m.user.first_name||existing.name||String(uid),
-        username:m.user.username||existing.username||"",
-        status:m.status,
-        isAdmin:true,
-        isOwner:m.status==="creator",
-        adminPerms:m.status==="administrator"?{
-          can_manage_chat:m.can_manage_chat||false,
-          can_delete_messages:m.can_delete_messages||false,
-          can_restrict_members:m.can_restrict_members||false,
-          can_promote_members:m.can_promote_members||false,
-          can_change_info:m.can_change_info||false,
-          can_invite_users:m.can_invite_users||false,
-          can_pin_messages:m.can_pin_messages||false,
-          can_post_messages:m.can_post_messages||false,
-          is_anonymous:m.is_anonymous||false,
-        }:null,
-        customTitle:m.custom_title||null,
-        isBot:m.user.is_bot||false,
-        lastSync:stamp(),
-      };
-      if(m.status==="creator"&&DB.groups[gid]){
-        DB.groups[gid].ownerId=uid;
-      }
-    }
-    saveDB();
-    return admins;
-  } catch(e){
-    console.error("syncGroupAdmins:",gid,e.message);
-    return [];
-  }
-}
-
-
-// ===================== جدولة الكتم الجماعي التلقائي =====================
-async function checkMuteSchedules() {
-  const nowTs = now();
-  for(const [gid, schedules] of Object.entries(DB.muteSchedules||{})){
-    for(const [sid, sch] of Object.entries(schedules||{})){
-      if(!sch.active) continue;
-      if(!sch.muteDone && sch.muteAt && nowTs >= sch.muteAt){
-        sch.muteDone = true;
-        try{
-          const members = Object.values(DB.groupMembers[gid]||{}).filter(m=>
-            m.status==="member" && !m.isAdmin && !m.isOwner
-          );
-          let count=0;
-          for(const m of members){
-            try{
-              await bot.telegram.restrictChatMember(gid, m.id, {
-                permissions:{can_send_messages:false},
-                until_date: sch.unmuteAt||0,
-              });
-              if(!DB.groupMuted[gid]) DB.groupMuted[gid]={};
-              DB.groupMuted[gid][m.id]=stamp();
-              count++;
-            }catch{}
-          }
-          sch.mutedCount=count;
-          const owner = DB.groups[gid]?.ownerId;
-          if(owner){
-            try{ await bot.telegram.sendMessage(owner,
-              `🔇 *كتم جماعي مجدول*\n\n🏘 ${DB.groups[gid]?.title||gid}\n✅ تم كتم *${count}* عضو\n⏰ سيُفك: ${sch.unmuteAt?new Date(sch.unmuteAt*1000).toLocaleString("ar-SA",{timeZone:"Asia/Riyadh"}):"يدوياً"}`,
-              {parse_mode:"Markdown"}); }catch{}
-          }
-        }catch(e){ console.error("muteSchedule:",e.message); }
-        saveDB();
-      }
-      if(sch.muteDone && !sch.unmuteDone && sch.unmuteAt && nowTs >= sch.unmuteAt){
-        sch.unmuteDone = true; sch.active = false;
-        try{
-          const muted = Object.keys(DB.groupMuted[gid]||{});
-          let count=0;
-          for(const mid of muted){
-            try{
-              await bot.telegram.restrictChatMember(gid, parseInt(mid), {
-                permissions:{can_send_messages:true,can_send_media_messages:true,
-                  can_send_polls:true,can_send_other_messages:true,can_add_web_page_previews:true},
-              });
-              delete DB.groupMuted[gid][mid];
-              count++;
-            }catch{}
-          }
-          const owner = DB.groups[gid]?.ownerId;
-          if(owner){
-            try{ await bot.telegram.sendMessage(owner,
-              `🔊 *فك الكتم الجماعي التلقائي*\n\n🏘 ${DB.groups[gid]?.title||gid}\n✅ رُفع الكتم عن *${count}* عضو`,
-              {parse_mode:"Markdown"}); }catch{}
-          }
-        }catch(e){ console.error("unmuteSchedule:",e.message); }
-        saveDB();
-      }
-    }
-  }
-}
-setInterval(checkMuteSchedules, 60000);
-
-// ===================== أدوات تعديل القروب/القناة =====================
-async function changeGroupPhoto(gid, fileId) {
-  try {
-    const fileLink = await bot.telegram.getFileLink(fileId);
-    const res = await axios.get(fileLink.href, {responseType:"arraybuffer",timeout:30000});
-    await bot.telegram.setChatPhoto(gid, {source: Buffer.from(res.data)});
-    return {ok:true};
-  } catch(e) { return {ok:false, error:e.message}; }
-}
-
-async function changeGroupTitle(gid, title) {
-  try { await bot.telegram.setChatTitle(gid, title); return {ok:true}; }
-  catch(e) { return {ok:false, error:e.message}; }
-}
-
-async function changeGroupDescription(gid, desc) {
-  try { await bot.telegram.setChatDescription(gid, desc); return {ok:true}; }
-  catch(e) { return {ok:false, error:e.message}; }
-}
-
-// رصد كامل للأعضاء: ID + يوزر + رتبة + رابط
-function buildMemberReport(gid) {
-  const g = DB.groups[gid]||{};
-  const members = Object.values(DB.groupMembers[gid]||{});
-  const active = members.filter(m=>m.status!=="left"&&m.status!=="kicked");
-  let report = `📋 *تقرير أعضاء ${g.title||gid}*\n🆔 \`${gid}\`\n`;
-  if(g.username) report += `🔗 @${g.username}\n`;
-  report += `👥 العدد: *${active.length}*\n\n`;
-  active.forEach((m,i)=>{
-    const role = m.isOwner||m.status==="creator"?"👑":m.isAdmin||m.status==="administrator"?"⭐":m.isBot?"🤖":"👤";
-    report += `${i+1}. ${role} *${m.name}*\n   🆔 \`${m.id}\``;
-    if(m.username) report += `\n   @${m.username}`;
-    if(m.customTitle) report += `\n   🏷 "${m.customTitle}"`;
-    report += `\n   📅 ${m.joinedAt||"—"}\n`;
-  });
-  return report;
-}
-
+// ===================== UptimeRobot =====================
 async function getMonitors() {
   try {
     const r=await axios.post("https://api.uptimerobot.com/v2/getMonitors",
@@ -713,8 +435,7 @@ const devKb=()=>Markup.inlineKeyboard([
   [Markup.button.callback("⚙️ إعدادات","dev_settings"),
    Markup.button.callback("🤖 تخصيص البوت","dev_customize")],
   [Markup.button.callback("💾 نسخ احتياطي","dev_backup"),
-   Markup.button.callback("📥 استيراد DB","dev_import_db")],
-  [Markup.button.callback("🤖 إعدادات AI","dev_ai_settings")],
+   Markup.button.callback("🤖 إعدادات AI","dev_ai_settings")],
 ]);
 
 const devSettingsKb=()=>Markup.inlineKeyboard([
@@ -734,32 +455,18 @@ function groupControlKb(gid, uid) {
   const rows = [
     [Markup.button.callback("👥 الأعضاء",`grp_members:${gid}`),
      Markup.button.callback("👑 المشرفون",`grp_admins:${gid}`)],
-    [Markup.button.callback("🔍 تحقق من رتبة",`grp_check_role:${gid}`),
-     Markup.button.callback("🔄 تحديث المشرفين",`grp_sync_admins:${gid}`)],
     [Markup.button.callback("🚫 طرد عضو",`grp_kick:${gid}`),
      Markup.button.callback("🔇 كتم عضو",`grp_mute_member:${gid}`)],
     [Markup.button.callback("🔊 رفع كتم",`grp_unmute_member:${gid}`),
      Markup.button.callback("📊 إحصائيات",`grp_stats:${gid}`)],
     [Markup.button.callback("👁 كلمات مراقبة",`grp_watchwords:${gid}`),
      Markup.button.callback("🚨 كلمات إساءة",`grp_badwords:${gid}`)],
-    [Markup.button.callback("📋 تقرير الأعضاء",`grp_member_report:${gid}`),
-     Markup.button.callback("🔗 رابط الدعوة",`group_link:${gid}`)],
   ];
   if(isOwner){
     rows.push([Markup.button.callback("⭐ ترقية مشرف",`grp_promote:${gid}`),
                Markup.button.callback("⬇️ إزالة مشرف",`grp_demote:${gid}`)]);
     rows.push([Markup.button.callback("🛡 حماية البوتات",`grp_antibot:${gid}`),
                Markup.button.callback("⚙️ إعدادات الحماية",`grp_protection:${gid}`)]);
-    // لوحة المالك الحصرية
-    rows.push([Markup.button.callback("👑 ═══ لوحة المالك ═══","noop_owner")]);
-    rows.push([Markup.button.callback("✏️ تغيير اسم القروب",`grp_change_title:${gid}`),
-               Markup.button.callback("📝 تغيير الوصف",`grp_change_desc:${gid}`)]);
-    rows.push([Markup.button.callback("🖼 تغيير صورة القروب",`grp_change_photo:${gid}`),
-               Markup.button.callback("📌 تثبيت رسالة",`grp_pin_msg:${gid}`)]);
-    rows.push([Markup.button.callback("🔇 كتم جماعي مجدول",`grp_mass_mute:${gid}`),
-               Markup.button.callback("🔊 فك كتم جماعي",`grp_mass_unmute:${gid}`)]);
-    rows.push([Markup.button.callback("📤 تصدير قائمة الأعضاء",`grp_export_members:${gid}`),
-               Markup.button.callback("📢 رسالة للقروب",`msg_group:${gid}`)]);
   }
   rows.push([Markup.button.callback("🔙 رجوع","dev_groups")]);
   return Markup.inlineKeyboard(rows);
@@ -790,24 +497,20 @@ bot.on("my_chat_member", async ctx=>{
   try {
     const chat=ctx.chat;
     if(chat.type==="group"||chat.type==="supergroup"){
-      const gid=String(chat.id);
-      if(!DB.groups[gid]){
-        DB.groups[gid]={
-          title:chat.title||"قروب",id:gid,type:chat.type,
+      if(!DB.groups[chat.id]){
+        DB.groups[chat.id]={
+          title:chat.title||"قروب",id:chat.id,type:chat.type,
           joinedAt:stamp(),members:0,ownerId:null,
           addedBy:ctx.myChatMember?.from?.id||null,
         };
       }
       // محاولة جلب بيانات المجموعة
       try {
-        const fullChat = await bot.telegram.getChat(gid);
+        const fullChat = await bot.telegram.getChat(chat.id);
         if(fullChat.type==="supergroup") {
-          DB.groups[gid].username = fullChat.username||null;
+          DB.groups[chat.id].username = fullChat.username||null;
         }
-        DB.groups[gid].title = fullChat.title||DB.groups[gid].title;
       }catch{}
-      // مزامنة قائمة المشرفين فور انضمام البوت
-      await syncGroupAdmins(gid);
       log("group_join",DEV_ID,chat.title);
       saveDB();
     }
@@ -819,8 +522,8 @@ bot.on("chat_member", async ctx=>{
   try {
     const chat=ctx.chat;
     const member=ctx.chatMember;
-    const gid=String(chat.id);
-    if(!DB.groups[gid]) DB.groups[gid]={title:chat.title||"قروب",id:gid,type:chat.type,joinedAt:stamp(),members:0,ownerId:null};
+    const gid=chat.id;
+    if(!DB.groups[gid]) return;
     if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
 
     const user=member.new_chat_member?.user||member.from;
@@ -830,7 +533,7 @@ bot.on("chat_member", async ctx=>{
     const oldStatus=member.old_chat_member?.status;
     const inviter=member.from;
 
-    // ─── عضو جديد انضم ───
+    // عضو جديد انضم
     if(["member","restricted"].includes(status)&&["left","kicked",""].includes(oldStatus||"")){
       DB.groupMembers[gid][uid]={
         name:user.first_name||"مجهول",
@@ -840,9 +543,6 @@ bot.on("chat_member", async ctx=>{
         addedBy:inviter?.id||null,
         addedByName:inviter?.first_name||"—",
         status:"member",
-        isAdmin:false,
-        isOwner:false,
-        adminPerms:null,
         isBot:user.is_bot||false,
       };
 
@@ -854,59 +554,55 @@ bot.on("chat_member", async ctx=>{
         }catch{}
       }
 
-      // فحص نظام الحماية التلقائية من إضافة كثيرة
-      if(inviter && inviter.id !== uid && DB.groupSettings[gid]?.antiSpamAdd){
-        const addKey=`addcount_${gid}_${inviter.id}_${Math.floor(Date.now()/60000)}`;
-        DB.daily[addKey]=(DB.daily[addKey]||0)+1;
-        if(DB.daily[addKey]>5){
-          try{
-            await bot.telegram.promoteChatMember(gid,inviter.id,{
-              can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
-              can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
-            });
-            await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter.username||inviter.id} بسبب الإضافة المتكررة`);
-          }catch{}
+      // تسجيل من أضافه
+      if(inviter && inviter.id !== uid){
+        const inviterInfo = DB.groupMembers[gid][inviter.id];
+        // فحص نظام الحماية التلقائية من إضافة كثيرة
+        if(DB.groupSettings[gid]?.antiSpamAdd){
+          const addKey=`addcount_${gid}_${inviter.id}_${Math.floor(Date.now()/60000)}`;
+          DB.daily[addKey]=(DB.daily[addKey]||0)+1;
+          if(DB.daily[addKey]>5){
+            // أزل من المشرفية إذا كان مشرفاً
+            try{
+              await bot.telegram.promoteChatMember(gid,inviter.id,{
+                can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
+                can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
+              });
+              await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter.username||inviter.id} بسبب الإضافة المتكررة`);
+            }catch{}
+          }
         }
       }
       saveDB();
     }
 
-    // ─── تحديث حالة المشرف — مزامنة مباشرة من Telegram ───
-    if(status==="administrator"||status==="creator"){
-      await syncMemberRole(gid, uid);
-      if(status==="creator"&&DB.groups[gid]) DB.groups[gid].ownerId=uid;
+    // تحديث حالة العضو
+    if(status==="administrator"){
+      if(DB.groupMembers[gid][uid]) DB.groupMembers[gid][uid].status="admin";
 
       // سجل تصرفات المشرفين
       if(!DB.adminActionLog[gid]) DB.adminActionLog[gid]=[];
-    }
 
-    // ─── مراقبة إزالة المشرفين ───
-    if(oldStatus==="administrator"&&status==="member"){
-      if(DB.groupMembers[gid][uid]){
-        DB.groupMembers[gid][uid].status="member";
-        DB.groupMembers[gid][uid].isAdmin=false;
-        DB.groupMembers[gid][uid].adminPerms=null;
-      }
-      if(DB.groupSettings[gid]?.monitorDemote){
-        const demoteKey=`demotecount_${gid}_${inviter?.id}_${today()}`;
-        DB.daily[demoteKey]=(DB.daily[demoteKey]||0)+1;
-        const limit=DB.groupSettings[gid]?.demoteLimit||3;
-        if(DB.daily[demoteKey]>=limit){
-          try{
-            await bot.telegram.promoteChatMember(gid,inviter.id,{
-              can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
-            });
-            await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter?.username||inviter?.id} بسبب تكرار إزالة المشرفين`);
-          }catch{}
+      // فحص نظام مراقبة إزالة المشرفين
+      if(oldStatus==="administrator"&&status!=="administrator"){
+        if(DB.groupSettings[gid]?.monitorDemote){
+          const demoteKey=`demotecount_${gid}_${inviter?.id}_${today()}`;
+          DB.daily[demoteKey]=(DB.daily[demoteKey]||0)+1;
+          const limit=DB.groupSettings[gid]?.demoteLimit||3;
+          if(DB.daily[demoteKey]>=limit){
+            try{
+              await bot.telegram.promoteChatMember(gid,inviter.id,{
+                can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
+              });
+              await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter?.username||inviter?.id} بسبب تكرار إزالة المشرفين`);
+            }catch{}
+          }
         }
       }
     }
-
     if(status==="left"||status==="kicked"){
       if(DB.groupMembers[gid][uid]) DB.groupMembers[gid][uid].status=status;
     }
-
-    saveDB();
   }catch(e){ console.error("chat_member:",e.message); }
 });
 
@@ -915,38 +611,32 @@ bot.on("message", async(ctx,next)=>{
   try {
     const chat=ctx.chat;
     if(chat&&(chat.type==="group"||chat.type==="supergroup")){
-      const gid=String(chat.id);
+      const gid=chat.id;
       const uid=ctx.from?.id;
       const text=ctx.message?.text||ctx.message?.caption||"";
 
       if(!text||!uid) return next();
 
-      // لا تطبّق قواعد الكلمات على المشرفين والمالك
-      const memberData=DB.groupMembers[gid]?.[uid];
-      const isGroupAdmin=memberData?.isAdmin||memberData?.isOwner||memberData?.status==="creator"||memberData?.status==="administrator";
-      if(!isGroupAdmin){
-        // كلمات الإساءة — يُكتم العضو مؤقتاً
-        const badwords=DB.groupBadwords[gid]||[];
-        const ltext=text.toLowerCase();
-        if(badwords.some(w=>ltext.includes(w.toLowerCase()))){
-          try{
-            await ctx.deleteMessage();
-            await bot.telegram.restrictChatMember(gid,uid,{permissions:{can_send_messages:false},until_date:Math.floor(Date.now()/1000)+300});
-            await ctx.reply(`⚠️ @${ctx.from.username||ctx.from.first_name} رسالتك تحتوي على كلمات محظورة. تم كتمك 5 دقائق.`);
-          }catch{}
-        }
+      // كلمات الإساءة — يُزال العضو تلقائياً
+      const badwords=DB.groupBadwords[gid]||[];
+      const ltext=text.toLowerCase();
+      if(badwords.some(w=>ltext.includes(w.toLowerCase()))){
+        try{
+          await ctx.deleteMessage();
+          await bot.telegram.banChatMember(gid,uid,{until_date:Math.floor(Date.now()/1000)+60});
+          await bot.telegram.unbanChatMember(gid,uid);
+          await ctx.reply(`⚠️ @${ctx.from.username||ctx.from.first_name} رسالتك تحتوي على كلمات محظورة وتم كتمك مؤقتاً.`);
+        }catch{}
       }
 
-      // كلمات المراقبة — ترسل للمطور/المالك سراً (حتى لو مشرف)
+      // كلمات المراقبة — ترسل للمطور/المالك سراً
       const watchwords=DB.groupWatchwords[gid]||[];
-      const ltext2=text.toLowerCase();
-      if(watchwords.some(w=>ltext2.includes(w.toLowerCase()))){
+      if(watchwords.some(w=>ltext.includes(w.toLowerCase()))){
         const g=DB.groups[gid]||{};
         const ownerId=g.ownerId||DEV_ID;
-        const senderRole=isGroupAdmin?"⭐ مشرف":"👤 عضو";
         try{
           await bot.telegram.sendMessage(ownerId,
-            `👁 *كلمة مراقبة رُصدت*\n\n🏘 القروب: *${g.title||gid}*\n${senderRole}: ${ctx.from.first_name} [${uid}]\n@${ctx.from.username||"—"}\n📝 الرسالة:\n${text.slice(0,300)}`,
+            `👁 *كلمة مراقبة رُصدت*\n\n🏘 القروب: *${g.title||gid}*\n👤 المرسل: ${ctx.from.first_name} [${uid}]\n📝 الرسالة: ${text.slice(0,200)}`,
             {parse_mode:"Markdown"});
         }catch{}
       }
@@ -961,9 +651,8 @@ bot.use(async(ctx,next)=>{
   ensureUser(ctx);
   const uid=ctx.from.id;
   if(ctx.chat&&(ctx.chat.type==="group"||ctx.chat.type==="supergroup")){
-    const gid=String(ctx.chat.id);
-    if(!DB.groups[gid]){
-      DB.groups[gid]={title:ctx.chat.title||"قروب",id:gid,type:ctx.chat.type,joinedAt:stamp(),members:0,ownerId:null};
+    if(!DB.groups[ctx.chat.id]){
+      DB.groups[ctx.chat.id]={title:ctx.chat.title||"قروب",id:ctx.chat.id,type:ctx.chat.type,joinedAt:stamp(),members:0};
     }
   }
   if(isBanned(uid)&&!isDev(uid)){ try{ await ctx.reply("🚫 أنت محظور."); }catch{} return; }
@@ -1422,9 +1111,794 @@ bot.on("callback_query", async ctx=>{
   // ══════════ لوحة التحكم ══════════
   if(data==="dev_settings"){ if(!isAdmin(uid))return; return edit("⚙️ *إعدادات البوت:*",devSettingsKb()); }
 
-  if(data==="ds_maint"){
+  if(data==="ds_maint"){ if(!isDev(uid))return; DB.settings.maintenanceMode=!DB.settings.maintenanceMode; saveDB(); return edit(`⚙️ الصيانة: ${DB.settings.maintenanceMode?"✅":"❌"}`,devSettingsKb()); }
+  if(data==="ds_screenshot"){
     if(!isDev(uid))return;
-    DB.settings.maintenanceMode=!DB.settings.maintenanceMode;
+    DB.settings.screenshotProtection=!DB.settings.screenshotProtection;
     saveDB();
-    const maintTxt = DB.settings.maintenanceMode ? "✅" : "❌";
-    return edit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+    return edit(`🛡 الحماية: ${DB.settings.screenshotProtection?"✅":"❌"}`,devSettingsKb());
+  }
+
+  for(const k of["ds_max","ds_cool","ds_watch","ds_ref"]){
+    if(data===k){
+      if(!isAdmin(uid))return;
+      const lbl={ds_max:"الحد اليومي",ds_cool:"وقت الانتظار (ث)",ds_watch:"مدة المراقبة (د)",ds_ref:"مكافأة الإحالة"};
+      DB.state[uid]={mode:"dev_setting",key:k};
+      return edit(`✏️ أرسل القيمة لـ *${lbl[k]}:*`,Markup.inlineKeyboard([[Markup.button.callback("❌","dev_settings")]]));
+    }
+  }
+
+  if(data==="dev_stats"){ if(!isAdmin(uid))return; return showDevStats({callbackQuery:true,editMessageText:(t,o)=>ctx.editMessageText(t,o),from:ctx.from}); }
+
+  if(data==="dev_logs"){
+    if(!isAdmin(uid))return;
+    let txt=`📜 *آخر ${Math.min(DB.logs.length,20)} أحداث:*\n\n`;
+    DB.logs.slice(0,20).forEach(l=>{ txt+=`▪️ *${l.type}* | \`${l.uid}\`\n${(l.text||"").slice(0,50)}\n🕐 ${l.time}\n\n`; });
+    return edit(txt||"لا سجلات.",Markup.inlineKeyboard([
+      [Markup.button.callback("🗑 مسح","dev_clear_logs"),Markup.button.callback("📥 تصدير","dev_export_logs")],
+      [Markup.button.callback("🔙","dev_panel")]
+    ]));
+  }
+
+  if(data==="dev_clear_logs"){ if(!isDev(uid))return; DB.logs=[]; saveDB(); return edit("✅ مُسح.",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]])); }
+
+  if(data==="dev_export_logs"){
+    if(!isDev(uid))return;
+    let txt="📜 سجل الأحداث:\n\n";
+    DB.logs.forEach(l=>{ txt+=`[${l.time}] ${l.type} | ${l.uid} | ${l.text}\n`; });
+    try{ await ctx.reply(`\`\`\`\n${txt.slice(0,4000)}\n\`\`\``,{parse_mode:"Markdown"}); }catch{}
+    return;
+  }
+
+  if(data==="dev_users"){
+    if(!isAdmin(uid))return;
+    const users=Object.entries(DB.users);const banned=users.filter(([,u])=>u.banned).length;
+    let txt=`👥 *الأعضاء (${users.length}):*\n🚫 ${banned} محظور\n\n`;
+    users.slice(0,8).forEach(([id,u])=>{
+      const b=u.banned?"🚫":u.muted?"🔇":isAdmin(parseInt(id))?"⭐":"👤";
+      txt+=`${b} *${u.name}* [\`${id}\`]\n@${u.username||"—"}\n`;
+    });
+    return edit(txt,Markup.inlineKeyboard([
+      [Markup.button.callback("📋 قائمة كاملة","dev_users_list"),Markup.button.callback("🔍 بحث","dev_search_user")],
+      [Markup.button.callback("🔙","dev_panel")]
+    ]));
+  }
+
+  if(data==="dev_users_list"){ if(!isAdmin(uid))return; return edit("*اختر عضواً:*",usersKb("dev_view_user")); }
+
+  if(data.startsWith("dev_view_user:")){
+    if(!isAdmin(uid))return;
+    const tid=parseInt(data.split(":")[1]);const u=DB.users[tid];
+    if(!u) return edit("❌ لم يُعثر.",backKb());
+    return edit(
+      `👤 *${u.name}*\n🆔 \`${tid}\`\n@${u.username||"—"}\n📅 ${u.joinedAt}\n`+
+      `📧 ${(DB.emailHistory[tid]||[]).length} إيميل\n🚫 ${u.banned?"محظور":"—"} | 🔇 ${u.muted?"مكتوم":"—"}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback(u.banned?"✅ رفع حظر":"🚫 حظر",u.banned?`dev_unban:${tid}`:`dev_ban:${tid}`),
+         Markup.button.callback(u.muted?"🔊 رفع كتم":"🔇 كتم",u.muted?`dev_unmute:${tid}`:`dev_mute:${tid}`)],
+        [Markup.button.callback("⭐ ترقية",`dev_promote:${tid}`),Markup.button.callback("⬇️ تخفيض",`dev_demote:${tid}`)],
+        [Markup.button.callback("🔙","dev_users_list")],
+      ]));
+  }
+
+  // ─── القروبات ───
+  if(data==="dev_groups"){
+    if(!isAdmin(uid))return;
+    const groups=Object.entries(DB.groups);
+    if(!groups.length) return edit("🏘 *لا توجد قروبات.*",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
+    let txt=`🏘 *القروبات (${groups.length}):*\n\n`;
+    groups.slice(0,10).forEach(([id,g])=>{ txt+=`📌 *${g.title}*\n🆔 \`${id}\`\n👥 ${Object.keys(DB.groupMembers[id]||{}).length} عضو\n\n`; });
+    const rows=groups.slice(0,8).map(([id,g])=>[Markup.button.callback(`🏘 ${g.title.slice(0,20)}`,`group_view:${id}`)]);
+    rows.push([Markup.button.callback("🔙","dev_panel")]);
+    return edit(txt,Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("group_view:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];const g=DB.groups[gid];
+    if(!g) return edit("❌",backKb());
+    const members=Object.values(DB.groupMembers[gid]||{});
+    const admins=members.filter(m=>m.status==="admin");
+    const txt=
+      `🏘 *${g.title}*\n🆔 \`${gid}\`\n`+
+      `👥 الأعضاء: *${members.length}*\n👑 المشرفون: *${admins.length}*\n`+
+      `📅 انضم البوت: ${g.joinedAt}`;
+    return edit(txt, groupControlKb(gid, uid));
+  }
+
+  // ─── أعضاء القروب ───
+  if(data.startsWith("grp_members:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];const g=DB.groups[gid];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    let txt=`👥 *أعضاء ${g?.title||gid} (${members.length}):*\n\n`;
+    members.slice(0,20).forEach((m,i)=>{
+      txt+=`${i+1}. ${m.isBot?"🤖":"👤"} *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n   📅 ${m.joinedAt}\n   ➕ أضافه: ${m.addedByName||"—"}\n\n`;
+    });
+    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── مشرفو القروب ───
+  if(data.startsWith("grp_admins:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];const g=DB.groups[gid];
+    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="admin");
+    let txt=`👑 *مشرفو ${g?.title||gid} (${admins.length}):*\n\n`;
+    admins.forEach((m,i)=>{ txt+=`${i+1}. ⭐ *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n\n`; });
+    if(!admins.length) txt+="لا يوجد مشرفون مسجّلون.";
+    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── إحصائيات القروب ───
+  if(data.startsWith("grp_stats:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];const g=DB.groups[gid];
+    const members=Object.values(DB.groupMembers[gid]||{});
+    const admins=members.filter(m=>m.status==="admin");
+    const bots=members.filter(m=>m.isBot);
+    const banned=Object.keys(DB.groupBanned[gid]||{}).length;
+    const muted=Object.keys(DB.groupMuted[gid]||{}).length;
+    const watchwords=(DB.groupWatchwords[gid]||[]).length;
+    const badwords=(DB.groupBadwords[gid]||[]).length;
+    return edit(
+      `📊 *إحصائيات ${g?.title||gid}*\n\n`+
+      `👥 إجمالي الأعضاء: *${members.length}*\n👑 المشرفون: *${admins.length}*\n`+
+      `🤖 البوتات: *${bots.length}*\n🚫 المحظورون: *${banned}*\n🔇 المكتومون: *${muted}*\n\n`+
+      `👁 كلمات مراقبة: *${watchwords}*\n🚨 كلمات إساءة: *${badwords}*`,
+      Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── طرد عضو ───
+  if(data.startsWith("grp_kick:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_kick:${gid}:${m.id}`)]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("🚫 *اختر العضو للطرد:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_kick:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.banChatMember(gid,tid);
+      await bot.telegram.unbanChatMember(gid,tid);
+      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="kicked";
+      saveDB();
+      return edit(`✅ *تم طرد العضو ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── كتم عضو ───
+  if(data.startsWith("grp_mute_member:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_mute:${gid}:${m.id}`)]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("🔇 *اختر العضو للكتم:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_mute:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.restrictChatMember(gid,tid,{permissions:{can_send_messages:false},until_date:0});
+      if(!DB.groupMuted[gid]) DB.groupMuted[gid]={};
+      DB.groupMuted[gid][tid]=stamp();
+      saveDB();
+      return edit(`✅ *تم كتم العضو ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── رفع كتم ───
+  if(data.startsWith("grp_unmute_member:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const muted=Object.keys(DB.groupMuted[gid]||{});
+    if(!muted.length) return edit("✅ *لا يوجد مكتومون.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    const rows=muted.slice(0,12).map(mid=>{
+      const m=DB.groupMembers[gid]?.[mid];
+      return [Markup.button.callback(`🔊 ${m?.name||mid}`,`grp_do_unmute:${gid}:${mid}`)];
+    });
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("🔊 *اختر العضو لرفع الكتم:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_unmute:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.restrictChatMember(gid,tid,{permissions:{can_send_messages:true,can_send_media_messages:true,can_send_polls:true,can_send_other_messages:true,can_add_web_page_previews:true}});
+      if(DB.groupMuted[gid]) delete DB.groupMuted[gid][tid];
+      saveDB();
+      return edit(`✅ *رُفع الكتم عن ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── ترقية مشرف ───
+  if(data.startsWith("grp_promote:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member"&&!m.isBot);
+    const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_promote:${gid}:${m.id}`)]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("⭐ *اختر العضو للترقية:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_promote:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.promoteChatMember(gid,tid,{
+        can_manage_chat:true,can_delete_messages:true,can_restrict_members:true,
+        can_invite_users:true,can_pin_messages:true,can_change_info:false,can_promote_members:false,
+      });
+      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="admin";
+      saveDB();
+      return edit(`⭐ *تمت ترقية ${tid} لمشرف*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── إزالة مشرف ───
+  if(data.startsWith("grp_demote:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="admin");
+    const rows=admins.slice(0,12).map(m=>[Markup.button.callback(`⭐ ${m.name.slice(0,20)}`,`grp_do_demote:${gid}:${m.id}`)]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("⬇️ *اختر المشرف لإزالته:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_demote:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.promoteChatMember(gid,tid,{
+        can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
+        can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
+      });
+      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="member";
+      saveDB();
+      return edit(`⬇️ *تمت إزالة صلاحيات ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── كلمات المراقبة ───
+  if(data.startsWith("grp_watchwords:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const words=DB.groupWatchwords[gid]||[];
+    let txt=`👁 *كلمات المراقبة في ${DB.groups[gid]?.title||gid}*\n\n`;
+    txt+=words.length?words.map((w,i)=>`${i+1}. \`${w}\``).join("\n"):"لا توجد كلمات مراقبة.";
+    txt+="\n\n_عند ذكر هذه الكلمات يُرسل تنبيه لك سراً_";
+    return edit(txt,Markup.inlineKeyboard([
+      [Markup.button.callback("➕ إضافة كلمة",`grp_add_watchword:${gid}`),
+       Markup.button.callback("🗑 مسح الكل",`grp_clear_watchwords:${gid}`)],
+      [Markup.button.callback("🔙",`group_view:${gid}`)],
+    ]));
+  }
+
+  if(data.startsWith("grp_add_watchword:")){
+    const gid=data.split(":")[1];
+    DB.state[uid]={mode:"add_watchword",gid};
+    return edit("✏️ أرسل الكلمة للمراقبة:",Markup.inlineKeyboard([[Markup.button.callback("❌",`grp_watchwords:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_clear_watchwords:")){
+    const gid=data.split(":")[1];
+    DB.groupWatchwords[gid]=[];saveDB();
+    return edit("✅ تم مسح كلمات المراقبة.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── كلمات الإساءة ───
+  if(data.startsWith("grp_badwords:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const words=DB.groupBadwords[gid]||[];
+    let txt=`🚨 *كلمات الإساءة في ${DB.groups[gid]?.title||gid}*\n\n`;
+    txt+=words.length?words.map((w,i)=>`${i+1}. \`${w}\``).join("\n"):"لا توجد كلمات إساءة.";
+    txt+="\n\n_من يقول هذه الكلمات يُكتم تلقائياً_";
+    return edit(txt,Markup.inlineKeyboard([
+      [Markup.button.callback("➕ إضافة كلمة",`grp_add_badword:${gid}`),
+       Markup.button.callback("🗑 مسح الكل",`grp_clear_badwords:${gid}`)],
+      [Markup.button.callback("🔙",`group_view:${gid}`)],
+    ]));
+  }
+
+  if(data.startsWith("grp_add_badword:")){
+    const gid=data.split(":")[1];
+    DB.state[uid]={mode:"add_badword",gid};
+    return edit("✏️ أرسل الكلمة المحظورة:",Markup.inlineKeyboard([[Markup.button.callback("❌",`grp_badwords:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_clear_badwords:")){
+    const gid=data.split(":")[1];
+    DB.groupBadwords[gid]=[];saveDB();
+    return edit("✅ تم مسح كلمات الإساءة.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── إعدادات الحماية ───
+  if(data.startsWith("grp_protection:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    if(!DB.groupSettings[gid]) DB.groupSettings[gid]={};
+    const gs=DB.groupSettings[gid];
+    return edit(
+      `⚙️ *إعدادات الحماية — ${DB.groups[gid]?.title||gid}*`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback(`🤖 مكافحة البوتات: ${gs.antiBot?"✅":"❌"}`,`grp_toggle:antiBot:${gid}`)],
+        [Markup.button.callback(`🛡 مكافحة الإضافة الكثيرة: ${gs.antiSpamAdd?"✅":"❌"}`,`grp_toggle:antiSpamAdd:${gid}`)],
+        [Markup.button.callback(`👁 مراقبة إزالة المشرفين: ${gs.monitorDemote?"✅":"❌"}`,`grp_toggle:monitorDemote:${gid}`)],
+        [Markup.button.callback("🔙",`group_view:${gid}`)],
+      ])
+    );
+  }
+
+  if(data.startsWith("grp_toggle:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const setting=parts[1];const gid=parts[2];
+    if(!DB.groupSettings[gid]) DB.groupSettings[gid]={};
+    DB.groupSettings[gid][setting]=!DB.groupSettings[gid][setting];
+    saveDB();
+    return ctx.answerCbQuery(`✅ تم التغيير`).catch(()=>{});
+  }
+
+  if(data.startsWith("grp_antibot:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    if(!DB.groupSettings[gid]) DB.groupSettings[gid]={};
+    DB.groupSettings[gid].antiBot=!DB.groupSettings[gid].antiBot;
+    saveDB();
+    return edit(`🛡 حماية البوتات: ${DB.groupSettings[gid].antiBot?"✅ مفعّلة":"❌ معطّلة"}`,
+      Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── رسالة للقروب ───
+  if(data.startsWith("msg_group:")){
+    if(!isAdmin(uid))return;
+    DB.state[uid]={mode:"send_group_msg",gid:data.split(":")[1]};
+    return edit("📢 أرسل الرسالة:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_groups")]]));
+  }
+
+  if(data.startsWith("group_link:")){
+    if(!isAdmin(uid))return;
+    try{
+      const link=await bot.telegram.exportChatInviteLink(data.split(":")[1]);
+      return edit(`🔗 *رابط الدعوة:*\n${link}`,backKb());
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,backKb()); }
+  }
+
+  if(data.startsWith("del_group:")){
+    if(!isDev(uid))return;
+    delete DB.groups[data.split(":")[1]];
+    saveDB();
+    return edit("🗑 تم.",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_groups")]]));
+  }
+
+  // ─── المسؤولون ───
+  if(data==="dev_admins"){
+    if(!isDev(uid))return;
+    const admins=[...DB.admins].filter(a=>a!==DEV_ID);
+    let txt=`🛡 *المسؤولون (${admins.length}):*\n\n`;
+    admins.forEach(aid=>{ const u=DB.users[aid]; txt+=`⭐ *${u?.name||aid}* [\`${aid}\`]\n`; });
+    if(!admins.length) txt+="لا يوجد مسؤولون.";
+    const rows=admins.map(aid=>[[Markup.button.callback(`⭐ ${DB.users[aid]?.name||aid}`,`admin_manage:${aid}`)]]).flat();
+    rows.push([Markup.button.callback("➕ إضافة","dev_promote")]);
+    rows.push([Markup.button.callback("🔙","dev_panel")]);
+    return edit(txt,Markup.inlineKeyboard(rows));
+  }
+
+  // ─── تخصيص البوت ───
+  if(data==="dev_customize"){
+    if(!isDev(uid))return;
+    return edit(`🤖 *تخصيص البوت*\n\n📛 الاسم: *${DB.settings.botName}*\n💬 الترحيب: _${DB.settings.welcomeMsg}_`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✏️ تغيير الاسم","change_bot_name")],
+        [Markup.button.callback("💬 تغيير رسالة الترحيب","change_welcome")],
+        [Markup.button.callback("📝 تغيير الوصف","change_bot_desc")],
+        [Markup.button.callback("🔙","dev_panel")],
+      ]));
+  }
+
+  if(data==="change_bot_name"){ if(!isDev(uid))return; DB.state[uid]={mode:"change_bot_name"}; return edit("✏️ أرسل الاسم الجديد:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
+  if(data==="change_welcome")  { if(!isDev(uid))return; DB.state[uid]={mode:"change_welcome"};  return edit("💬 أرسل رسالة الترحيب الجديدة:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
+  if(data==="change_bot_desc") { if(!isDev(uid))return; DB.state[uid]={mode:"change_bot_desc"}; return edit("📝 أرسل الوصف الجديد:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
+
+  // ─── إعلانات ───
+  if(data==="dev_announce"){
+    if(!isAdmin(uid))return;
+    DB.state[uid]={mode:"dev_announce"};
+    return edit("📣 أرسل نص الإعلان:",Markup.inlineKeyboard([
+      [Markup.button.callback("🗑 مسح الحالي","dev_clear_ann")],
+      [Markup.button.callback("❌","dev_panel")]
+    ]));
+  }
+  if(data==="dev_clear_ann"){ if(!isAdmin(uid))return; DB.announcements=[]; saveDB(); return edit("✅ مُسح.",devKb()); }
+
+  // ─── رسالة جماعية ───
+  if(data==="dev_broadcast"){
+    if(!hasPerm(uid,"broadcast")) return edit("❌ لا صلاحية.",backKb());
+    DB.state[uid]={mode:"broadcast"};
+    return edit("📢 أرسل الرسالة الجماعية:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_panel")]]));
+  }
+
+  // ─── بحث عضو ───
+  if(data==="dev_search_user"){
+    if(!isAdmin(uid))return;
+    DB.state[uid]={mode:"dev_search"};
+    return edit("🔍 أرسل ID أو اسم:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_panel")]]));
+  }
+
+  // ─── نسخ احتياطي ───
+  if(data==="dev_backup"){
+    if(!isDev(uid))return;
+    try{
+      const backup={...DB,admins:[...DB.admins]};
+      const txt=JSON.stringify(backup);
+      const total=Object.keys(DB.users).length;
+      const groups=Object.keys(DB.groups).length;
+      return edit(
+        `💾 *النسخ الاحتياطي*\n\n👥 الأعضاء: *${total}*\n🏘 القروبات: *${groups}*\n📜 السجلات: *${DB.logs.length}*\n💾 الحجم: *${(txt.length/1024).toFixed(1)}KB*\n\n✅ قاعدة البيانات تُحفظ تلقائياً كل 30 ثانية`,
+        Markup.inlineKeyboard([[Markup.button.callback("📤 تصدير JSON","dev_export_db")],[Markup.button.callback("🔙","dev_panel")]]));
+    }catch(e){ return edit(`❌ خطأ: ${e.message}`,backKb()); }
+  }
+
+  if(data==="dev_export_db"){
+    if(!isDev(uid))return;
+    try{
+      const backup={...DB,admins:[...DB.admins]};
+      const txt=JSON.stringify(backup,null,2);
+      await bot.telegram.sendDocument(ctx.chat.id,
+        {source:Buffer.from(txt),filename:`backup_${today()}.json`},
+        {caption:"💾 نسخة احتياطية من قاعدة البيانات"});
+    }catch(e){ await ctx.reply(`❌ فشل التصدير: ${e.message}`); }
+    return;
+  }
+
+  // ─── إعدادات AI ───
+  if(data==="dev_ai_settings"){
+    if(!isDev(uid))return;
+    const totalConvs=Object.values(DB.aiConversations).reduce((a,c)=>a+c.length,0);
+    return edit(
+      `🤖 *إعدادات الذكاء الاصطناعي*\n\n`+
+      `📊 إجمالي الرسائل: *${totalConvs}*\n`+
+      `👥 المحادثات النشطة: *${Object.keys(DB.aiConversations).length}*\n`+
+      `🔑 النموذج: *DeepSeek Chat*\n`+
+      `♾️ الرصيد: غير محدود`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🗑 مسح كل المحادثات","dev_clear_all_ai")],
+        [Markup.button.callback("🔙","dev_panel")],
+      ]));
+  }
+
+  if(data==="dev_clear_all_ai"){
+    if(!isDev(uid))return;
+    DB.aiConversations={};saveDB();
+    return edit("✅ تم مسح كل محادثات AI.",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
+  }
+
+  // ─── إجراءات الأعضاء ───
+  const acts=["dev_ban","dev_unban","dev_mute","dev_unmute","dev_promote","dev_demote"];
+  for(const act of acts){
+    if(data===act){ if(!isAdmin(uid))return; return edit("*اختر عضواً:*",usersKb(act)); }
+    if(data.startsWith(`${act}:`)){
+      if(!isAdmin(uid))return;
+      const tid=parseInt(data.split(":")[1]);
+      if(!DB.users[tid]) DB.users[tid]={name:String(tid),username:"",joinedAt:stamp(),banned:false,muted:false,role:"user",lastSeen:"—",msgCount:0,verified:false};
+      let msg="";
+      if(act==="dev_ban")    { if(!hasPerm(uid,"ban"))return; DB.users[tid].banned=true;  msg=`🚫 تم حظر \`${tid}\``; log("ban",uid,String(tid)); }
+      if(act==="dev_unban")  { if(!hasPerm(uid,"ban"))return; DB.users[tid].banned=false; msg=`✅ رُفع حظر \`${tid}\``; log("unban",uid,String(tid)); }
+      if(act==="dev_mute")   { if(!hasPerm(uid,"mute"))return; DB.users[tid].muted=true;   msg=`🔇 تم كتم \`${tid}\``; log("mute",uid,String(tid)); }
+      if(act==="dev_unmute") { if(!hasPerm(uid,"mute"))return; DB.users[tid].muted=false;  msg=`🔊 رُفع كتم \`${tid}\``; log("unmute",uid,String(tid)); }
+      if(act==="dev_promote"){ if(!isDev(uid))return; DB.admins.add(tid); DB.users[tid].role="admin"; msg=`⭐ ترقية \`${tid}\``; log("promote",uid,String(tid)); try{await bot.telegram.sendMessage(tid,"⭐ تمت ترقيتك لمسؤول!");}catch{} }
+      if(act==="dev_demote") { if(!isDev(uid))return; DB.admins.delete(tid); delete DB.adminPerms[tid]; DB.users[tid].role="user"; msg=`⬇️ تخفيض \`${tid}\``; log("demote",uid,String(tid)); }
+      saveDB();
+      try{ await bot.telegram.sendMessage(tid,`📢 إجراء: ${msg.replace(/`/g,"")}`); }catch{}
+      return edit(msg,Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
+    }
+  }
+
+  if(data.startsWith("upage:")){ const[,act,pg]=data.split(":"); return edit("*اختر:*",usersKb(act,parseInt(pg))); }
+});
+
+// ===================== النصوص =====================
+bot.on("text", async ctx=>{
+  const uid=ctx.from.id;
+  const text=ctx.message.text.trim();
+  const st=DB.state[uid];
+
+  // ── AI Chat (أولوية عليا) ──
+  if(st?.mode==="ai_chat"){
+    if(text.startsWith("/")) return; // تجاهل الأوامر
+    try{ await ctx.sendChatAction("typing"); }catch{}
+    const reply=await aiChat(uid,text);
+    saveDB();
+    // إرسال الرد مع زر إنهاء
+    return ctx.reply(reply,{
+      parse_mode:"Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🗑 مسح المحادثة","ai_clear_conv"),
+         Markup.button.callback("❌ خروج","menu_ai_stop")],
+      ])
+    }).catch(()=>ctx.reply(reply,Markup.inlineKeyboard([[Markup.button.callback("❌ خروج","menu_ai_stop")]])));
+  }
+
+  if(!st) return;
+
+  // ── CAPTCHA ──
+  if(st.mode==="captcha"){
+    if(parseInt(text)===DB.sessions[uid]?.captchaAns){
+      delete DB.state[uid];
+      log("verified",uid,DB.users[uid]?.name);
+      return showRegisterOrLogin(ctx);
+    } else {
+      const n1=Math.floor(Math.random()*9)+1,n2=Math.floor(Math.random()*9)+1;
+      DB.sessions[uid].captchaAns=n1+n2;
+      return ctx.reply(`❌ خطأ. حاول:\n\n🔢 *${n1} + ${n2} = ?*`,{parse_mode:"Markdown"});
+    }
+  }
+
+  // ── تسجيل الدخول ──
+  if(st.mode==="login_email"){
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply("❌ بريد غير صحيح، حاول مجدداً.");
+    // البحث عن الحساب
+    const found=Object.entries(DB.users).find(([,u])=>u.accountEmail===text);
+    if(!found) return ctx.reply("❌ لم يُعثر على حساب بهذا الإيميل.\n\nاختر 'إنشاء حساب جديد' إذا لم يكن لديك حساب.",
+      Markup.inlineKeyboard([[Markup.button.callback("✨ إنشاء حساب","register_new")]]));
+    DB.state[uid]={mode:"login_pass",targetUid:found[0]};
+    return ctx.reply("🔑 أدخل كلمة السر:",Markup.inlineKeyboard([[Markup.button.callback("❌ إلغاء","back")]]));
+  }
+
+  if(st.mode==="login_pass"){
+    const targetUid=st.targetUid;
+    const targetUser=DB.users[targetUid];
+    if(!targetUser) return ctx.reply("❌ خطأ، حاول مجدداً.");
+    if(hashPass(text)!==targetUser.passwordHash) return ctx.reply("❌ كلمة السر خاطئة.");
+    delete DB.state[uid];
+    // استعادة بيانات الحساب
+    if(targetUid!=String(uid)){
+      // نقل بيانات الحساب القديم للمستخدم الحالي
+      DB.users[uid].accountEmail=targetUser.accountEmail;
+      DB.users[uid].accountPassword=targetUser.accountPassword;
+      DB.users[uid].passwordHash=targetUser.passwordHash;
+      DB.users[uid].savedEmails_bak=DB.savedEmails[targetUid]||[];
+    }
+    DB.users[uid].verified=true;
+    saveDB();
+    log("login",uid,targetUser.accountEmail);
+    await ctx.reply(
+      `✅ *تم تسجيل الدخول بنجاح!*\n\n👤 مرحباً مجدداً!\n📧 \`${targetUser.accountEmail}\`\n\nتم استعادة كل بياناتك.`,
+      {parse_mode:"Markdown"});
+    return showMain(ctx);
+  }
+
+  // ── فحص VirusTotal ──
+  if(st.mode==="vt_url"){
+    delete DB.state[uid];
+    await ctx.reply("⏳ *جاري الفحص...*",{parse_mode:"Markdown"});
+    const r=await vtScanUrl(text);
+    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
+    const {stats,reputation,malEngines}=r;
+    const mal=stats.malicious||0,sus=stats.suspicious||0,clean=stats.harmless||0,undet=stats.undetected||0;
+    const vd=mal>0?"🔴 *خطر!*":sus>0?"🟡 *مشبوه*":"🟢 *آمن*";
+    const engTxt=malEngines?.length?`\n\n🚨 *كشف بواسطة:*\n${malEngines.join(", ")}`:"";
+    return ctx.reply(
+      `🔍 *نتيجة فحص الرابط*\n\n${vd}\n\n🔗 \`${text.slice(0,60)}\`\n\n`+
+      `🔴 ضار: *${mal}* | 🟡 مشبوه: *${sus}*\n🟢 آمن: *${clean}* | ⬜ غير محدد: *${undet}*\n⭐ السمعة: *${reputation}*`+engTxt,
+      {parse_mode:"Markdown",...mainKb()});
+  }
+
+  if(st.mode==="vt_domain"){
+    delete DB.state[uid];
+    await ctx.reply("⏳ *جاري فحص الدومين...*",{parse_mode:"Markdown"});
+    const domain=text.replace(/https?:\/\//,"").split("/")[0];
+    const r=await vtScanDomain(domain);
+    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
+    const {stats,reputation,registrar,created,malEngines}=r;
+    const mal=stats.malicious||0;
+    return ctx.reply(
+      `🌐 *فحص الدومين*\n\n${mal>0?"🔴 *خطر*":"🟢 *آمن*"}\n\n\`${domain}\`\n\n`+
+      `🔴 ضار: *${mal}* | 🟢 آمن: *${stats.harmless||0}*\n⭐ السمعة: *${reputation}*\n🏢 ${registrar}\n📅 ${created}`+
+      (malEngines?.length?`\n🚨 ${malEngines.join(", ")}`:""),
+      {parse_mode:"Markdown",...mainKb()});
+  }
+
+  if(st.mode==="vt_ip"){
+    delete DB.state[uid];
+    await ctx.reply("⏳ *جاري فحص IP...*",{parse_mode:"Markdown"});
+    const r=await vtScanIp(text);
+    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
+    const {stats,reputation,country,asOwner,malEngines}=r;
+    const mal=stats.malicious||0;
+    return ctx.reply(
+      `🖥 *فحص IP*\n\n${mal>0?"🔴 *خطر*":"🟢 *آمن*"}\n\n\`${text}\`\n🌍 ${country}\n🏢 ${asOwner}\n\n`+
+      `🔴 *${mal}* | 🟢 *${stats.harmless||0}*\n⭐ *${reputation}*`+
+      (malEngines?.length?`\n🚨 ${malEngines.join(", ")}`:""),
+      {parse_mode:"Markdown",...mainKb()});
+  }
+
+  // ── كلمات مراقبة القروب ──
+  if(st.mode==="add_watchword"){
+    const gid=st.gid; delete DB.state[uid];
+    if(!DB.groupWatchwords[gid]) DB.groupWatchwords[gid]=[];
+    DB.groupWatchwords[gid].push(text.toLowerCase());
+    saveDB();
+    return ctx.reply(`✅ *تمت إضافة كلمة المراقبة:* \`${text}\``,
+      {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_watchwords:${gid}`)]])});
+  }
+
+  // ── كلمات إساءة القروب ──
+  if(st.mode==="add_badword"){
+    const gid=st.gid; delete DB.state[uid];
+    if(!DB.groupBadwords[gid]) DB.groupBadwords[gid]=[];
+    DB.groupBadwords[gid].push(text.toLowerCase());
+    saveDB();
+    return ctx.reply(`✅ *تمت إضافة كلمة الإساءة:* \`${text}\``,
+      {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_badwords:${gid}`)]])});
+  }
+
+  // ── حفظ الإيميل ──
+  if(st.mode==="save_email_label"){
+    const {email,inboxId}=st; delete DB.state[uid];
+    if(!DB.savedEmails[uid]) DB.savedEmails[uid]=[];
+    DB.savedEmails[uid].push({email,inboxId,label:text,savedAt:stamp()});
+    saveDB(); log("email_saved",uid,`${email}|${text}`);
+    return ctx.reply(`✅ *تم الحفظ!*\n\n📧 \`${email}\`\n🏷 *${text}*`,{parse_mode:"Markdown",...emailActiveKb(email,inboxId)});
+  }
+
+  // ── كلمات السر ──
+  if(st.mode==="store_pass_platform"){
+    const pass=st.pass; delete DB.state[uid];
+    if(!DB.savedPasswords[uid]) DB.savedPasswords[uid]=[];
+    DB.savedPasswords[uid].push({platform:text,password:pass,savedAt:stamp()});
+    saveDB(); log("pass_saved",uid,text);
+    return ctx.reply(`✅ *تم الحفظ!*\n\n🏷 *${text}*\n🔐 \`${pass}\``,{parse_mode:"Markdown",...mainKb()});
+  }
+  if(st.mode==="save_pass_custom"){
+    DB.state[uid]={mode:"store_pass_platform",pass:text};
+    return ctx.reply("✏️ اسم المنصة:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_passwords")]]));
+  }
+
+  // ── إعداد الحساب ──
+  if(st.mode==="acc_email"){
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply("❌ بريد غير صحيح.");
+    delete DB.state[uid]; DB.users[uid].accountEmail=text; saveDB();
+    return ctx.reply(`✅ *تم ربط البريد:* \`${text}\``,{parse_mode:"Markdown",...mainKb()});
+  }
+  if(st.mode==="acc_pass"){
+    if(text.length<6) return ctx.reply("❌ يجب 6 أحرف+.");
+    delete DB.state[uid];
+    DB.users[uid].passwordHash=hashPass(text);
+    DB.users[uid].accountPassword=text;
+    saveDB();
+    return ctx.reply("✅ *تم تعيين كلمة السر!*",{parse_mode:"Markdown",...mainKb()});
+  }
+
+  // ── إعدادات الأرقام ──
+  if(st.mode==="dev_setting"){
+    if(!isAdmin(uid))return;
+    const val=parseInt(text);
+    if(isNaN(val)||val<1) return ctx.reply("❌ قيمة غير صحيحة.");
+    if(st.key==="ds_max")   DB.settings.maxEmailsPerDay=val;
+    if(st.key==="ds_cool")  DB.settings.cooldown=val;
+    if(st.key==="ds_watch") DB.settings.emailWatchMin=val;
+    if(st.key==="ds_ref")   DB.settings.refBonus=val;
+    delete DB.state[uid]; saveDB();
+    return ctx.reply("✅ تم التحديث.",devSettingsKb());
+  }
+
+  if(st.mode==="dev_announce"){
+    if(!isAdmin(uid))return;
+    delete DB.state[uid];
+    DB.announcements.unshift(text);
+    if(DB.announcements.length>3) DB.announcements.pop();
+    saveDB();
+    return ctx.reply("✅ تم النشر.",devKb());
+  }
+
+  if(st.mode==="dev_search"){
+    if(!isAdmin(uid))return;
+    delete DB.state[uid];
+    const q=text.toLowerCase();
+    const found=Object.entries(DB.users).filter(([id,u])=>
+      id===text||u.name?.toLowerCase().includes(q)||u.username?.toLowerCase().includes(q));
+    if(!found.length) return ctx.reply("❌ لم يُعثر.",devKb());
+    let txt=`🔍 *نتائج (${found.length}):*\n\n`;
+    found.slice(0,5).forEach(([id,u])=>{ txt+=`👤 *${u.name}* [\`${id}\`]\n@${u.username||"—"}\n\n`; });
+    const rows=found.slice(0,5).map(([id])=>[[Markup.button.callback(`👁 ${id}`,`dev_view_user:${id}`)]]).flat();
+    rows.push([Markup.button.callback("🔙","dev_panel")]);
+    return ctx.reply(txt,{parse_mode:"Markdown",...Markup.inlineKeyboard(rows)});
+  }
+
+  if(st.mode==="broadcast"){
+    if(!hasPerm(uid,"broadcast"))return;
+    delete DB.state[uid];
+    const ids=Object.keys(DB.users);
+    await ctx.reply(`📢 جاري الإرسال لـ ${ids.length} عضو...`);
+    let sent=0,fail=0;
+    for(const id of ids){
+      try{ await bot.telegram.sendMessage(parseInt(id),`📢 *رسالة من الإدارة:*\n\n${text}`,{parse_mode:"Markdown"}); sent++; await sleep(50); }
+      catch{ fail++; }
+    }
+    log("broadcast",uid,`${sent} نجح | ${fail} فشل`);
+    saveDB();
+    return ctx.reply(`✅ *${sent}* أُرسلت | *${fail}* فشل`,{parse_mode:"Markdown",...devKb()});
+  }
+
+  if(st.mode==="send_group_msg"){
+    if(!isAdmin(uid))return;
+    const gid=st.gid; delete DB.state[uid];
+    try{
+      await bot.telegram.sendMessage(gid,`📢 *من الإدارة:*\n\n${text}`,{parse_mode:"Markdown"});
+      return ctx.reply("✅ تم الإرسال.",devKb());
+    }catch(e){ return ctx.reply(`❌ فشل: ${e.message}`,devKb()); }
+  }
+
+  if(st.mode==="change_bot_name"){
+    if(!isDev(uid))return; delete DB.state[uid];
+    DB.settings.botName=text;
+    try{ await bot.telegram.setMyName(text); }catch{}
+    saveDB();
+    return ctx.reply(`✅ تم تغيير الاسم: *${text}*`,{parse_mode:"Markdown",...devKb()});
+  }
+
+  if(st.mode==="change_welcome"){
+    if(!isDev(uid))return; delete DB.state[uid];
+    DB.settings.welcomeMsg=text; saveDB();
+    return ctx.reply("✅ تم تغيير رسالة الترحيب.",devKb());
+  }
+
+  if(st.mode==="change_bot_desc"){
+    if(!isDev(uid))return; delete DB.state[uid];
+    try{ await bot.telegram.setMyDescription(text); return ctx.reply("✅ تم تغيير الوصف.",devKb()); }
+    catch(e){ return ctx.reply(`❌ فشل: ${e.message}`,devKb()); }
+  }
+});
+
+// ===================== فحص الملفات =====================
+bot.on(["document","photo","video","audio"], async ctx=>{
+  const uid=ctx.from.id;
+  if(!DB.users[uid]?.verified&&!isDev(uid)) return;
+  const file=ctx.message.document||(ctx.message.photo&&ctx.message.photo[ctx.message.photo.length-1])||ctx.message.video||ctx.message.audio;
+  if(!file) return;
+  const fileSize=file.file_size||0;
+  if(fileSize>32*1024*1024) return ctx.reply("❌ الملف أكبر من 32MB.");
+  const fname=file.file_name||`file_${Date.now()}`;
+  const ext=fname.split(".").pop()?.toLowerCase()||"";
+  let fileType="📄 مستند";
+  if(["jpg","jpeg","png","gif","webp"].includes(ext)) fileType="🖼 صورة";
+  else if(["apk","exe","msi"].includes(ext)) fileType="📱 تطبيق";
+  else if(["mp4","avi","mkv"].includes(ext)) fileType="🎬 فيديو";
+  else if(["mp3","wav","ogg"].includes(ext)) fileType="🎵 صوت";
+  else if(["pdf","doc","docx"].includes(ext)) fileType="📋 وثيقة";
+  else if(["zip","rar","7z"].includes(ext)) fileType="📦 مضغوط";
+  else if(["js","py","php","sh"].includes(ext)) fileType="💻 سكريبت";
+  await ctx.reply(`🔍 *جاري فحص الملف...*\n\n${fileType}: \`${fname}\`\n📦 ${(fileSize/1024).toFixed(1)}KB\n\n⏳ الفحص بـ 70+ محرك...`,{parse_mode:"Markdown"});
+  try{
+    const link=await bot.telegram.getFileLink(file.file_id);
+    const res=await axios.get(link.href,{responseType:"arraybuffer",timeout:60000});
+    const id=await vtUploadFile(Buffer.from(res.data),fname);
+    if(!id) return ctx.reply("❌ فشل رفع الملف.",mainKb());
+    log("file_scan",uid,fname);
+    await ctx.reply("⏳ *تم الرفع. جاري التحليل...*",{parse_mode:"Markdown"});
+    const report=await vtGetAnalysis(id);
+    if(!report) return ctx.reply("⌛ التحليل لم يكتمل. حاول لاحقاً.",mainKb());
+    const stats=report.stats||{};
+    const mal=stats.malicious||0,sus=stats.suspicious||0,clean=stats.harmless||0,undet=stats.undetected||0;
+    const vd=mal>0?"🔴 *خطر!*":sus>0?"🟡 *مشبوه*":"🟢 *آمن*";
+    const malEngines=Object.entries(report.results||{}).filter(([,v])=>v.category==="malicious").map(([k,v])=>`${k}: ${v.result||""}`).slice(0,8);
+    return ctx.reply(
+      `🔍 *نتيجة الفحص*\n\n${vd}\n\n${fileType}: \`${fname}\`\n\n`+
+      `🔴 ضار: *${mal}*\n🟡 مشبوه: *${sus}*\n🟢 آمن: *${clean}*\n⬜ غير محدد: *${undet}*`+
+      (malEngines.length?`\n\n🚨 *كشف بواسطة:*\n${malEngines.join("\n")}`:""),
+      {parse_mode:"Markdown",...mainKb()});
+  }catch(e){ return ctx.reply("❌ خطأ أثناء الفحص.",mainKb()); }
+});
+
+// ===================== تشغيل =====================
+console.log("🚀 البوت v5.0 — شامل المميزات");
+bot.launch();
+process.once("SIGINT",  ()=>{ saveDB(); bot.stop("SIGINT"); });
+process.once("SIGTERM", ()=>{ saveDB(); bot.stop("SIGTERM"); });
