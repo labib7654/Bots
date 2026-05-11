@@ -1,9 +1,10 @@
 "use strict";
 
 // ============================================================
-//  بوت تيليجرام شامل المطور v5.0
+//  بوت تيليجرام شامل المطور v6.0
 //  مع: قاعدة بيانات JSON | تحقق مرة واحدة | تسجيل دخول/إنشاء حساب
 //  AI غير محدود | نظام قروبات متكامل | تحكم شامل للمطور
+//  ✅ مُطوَّر ومُصحَّح بالكامل
 // ============================================================
 
 const { Telegraf, Markup } = require("telegraf");
@@ -19,7 +20,7 @@ const MS_API_KEY  = "sk_jmXm1Im3hxzT7Lnf_6T6dD3ab7Xzf4ACe0or8TEqBNX9L6hwW9rw1ddf
 const MS_BASE     = "https://api.mailslurp.com";
 const VT_KEY      = "4158807647a3b9b2e4ed33bb0094db123bbc9197456d20ebd57c78676e786588";
 const UR_KEY      = "u3469811-ab163c31f24d6012491f0807";
-const AI_KEY      = "sk-f7307872f8004ecd92c0764b0f03f7f5"; // مفتاح الذكاء الاصطناعي
+const AI_KEY      = "sk-f7307872f8004ecd92c0764b0f03f7f5";
 const AI_BASE     = "https://api.deepseek.com/v1";
 const AI_MODEL    = "deepseek-chat";
 const DEV_ID      = 7411444902;
@@ -37,13 +38,12 @@ const msHeaders = {
 http.createServer((_,res)=>{ res.writeHead(200); res.end("OK"); })
   .listen(PORT,"0.0.0.0",()=>console.log(`✅ Port ${PORT}`));
 
-// ===================== قاعدة البيانات (JSON دائمة) =====================
+// ===================== قاعدة البيانات =====================
 function loadDB() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, "utf8");
       const data = JSON.parse(raw);
-      // تحويل Set من array
       if (Array.isArray(data.admins)) data.admins = new Set(data.admins);
       else data.admins = new Set([DEV_ID]);
       return data;
@@ -55,38 +55,44 @@ function loadDB() {
 function saveDB() {
   try {
     const toSave = { ...DB };
-    toSave.admins = [...DB.admins]; // Set → Array للحفظ
+    toSave.admins = [...DB.admins];
     fs.writeFileSync(DB_FILE, JSON.stringify(toSave, null, 2), "utf8");
   } catch(e) { console.error("saveDB error:", e.message); }
 }
 
-// حفظ تلقائي كل 30 ثانية
 setInterval(saveDB, 30000);
 
 const defaultDB = {
-  users:         {},
-  sessions:      {},
-  activeEmails:  {},
-  savedEmails:   {},
-  savedPasswords:{},
-  emailHistory:  {},
-  activityLog:   {},
-  referrals:     {},
-  referralOf:    {},
-  referralPerks: {},
-  logs:          [],
-  admins:        new Set([DEV_ID]),
-  adminPerms:    {},
-  announcements: [],
-  groups:        {},
-  groupSettings: {},  // إعدادات كل قروب
-  groupMembers:  {},  // أعضاء كل قروب
-  groupBanned:   {},  // محظورون في القروب
-  groupMuted:    {},  // مكتومون في القروب
-  groupWatchwords:{}, // كلمات مراقبة لكل قروب
-  groupBadwords:  {}, // كلمات إساءة لكل قروب
-  adminActionLog: {}, // سجل تصرفات المشرفين
-  aiConversations:{}, // محادثات AI لكل مستخدم
+  users:          {},
+  sessions:       {},
+  activeEmails:   {},
+  savedEmails:    {},
+  savedPasswords: {},
+  emailHistory:   {},
+  activityLog:    {},
+  referrals:      {},
+  referralOf:     {},
+  referralPerks:  {},
+  logs:           [],
+  admins:         new Set([DEV_ID]),
+  adminPerms:     {},
+  announcements:  [],
+  groups:         {},
+  groupSettings:  {},
+  groupMembers:   {},
+  groupBanned:    {},
+  groupMuted:     {},
+  groupWatchwords:{},
+  groupBadwords:  {},
+  adminActionLog: {},
+  aiConversations:{},
+  aiModes:        {}, // ✅ جديد: وضع AI لكل مستخدم (عام/برمجة/ترجمة/شعر)
+  notes:          {}, // ✅ جديد: ملاحظات المستخدمين
+  reminders:      {}, // ✅ جديد: تذكيرات المستخدمين
+  polls:          {}, // ✅ جديد: استطلاعات القروبات
+  grpWelcome:     {}, // ✅ جديد: رسائل ترحيب مخصصة لكل قروب
+  grpRules:       {}, // ✅ جديد: قواعد كل قروب
+  userNotes:      {}, // ✅ جديد: ملاحظات المشرفين على المستخدمين
   settings: {
     maxEmailsPerDay:      30,
     cooldown:             8,
@@ -94,8 +100,11 @@ const defaultDB = {
     refBonus:             5,
     maintenanceMode:      false,
     screenshotProtection: false,
-    botName:              "بوت شامل v5",
+    botName:              "بوت شامل v6",
     welcomeMsg:           "أهلاً بك في البوت! 🎉",
+    aiEnabled:            true,   // ✅ جديد: تفعيل/تعطيل AI
+    maxAiMsgsPerDay:      100,    // ✅ جديد: حد يومي لرسائل AI
+    autoDeleteBadwords:   true,   // ✅ جديد: حذف رسائل الكلمات السيئة تلقائياً
   },
   lastReq:  {},
   daily:    {},
@@ -105,6 +114,18 @@ const defaultDB = {
 
 const loaded = loadDB();
 const DB = loaded || defaultDB;
+// ضمان وجود الحقول الجديدة في قاعدة بيانات قديمة
+if (!DB.aiModes)    DB.aiModes = {};
+if (!DB.notes)      DB.notes = {};
+if (!DB.reminders)  DB.reminders = {};
+if (!DB.polls)      DB.polls = {};
+if (!DB.grpWelcome) DB.grpWelcome = {};
+if (!DB.grpRules)   DB.grpRules = {};
+if (!DB.userNotes)  DB.userNotes = {};
+if (!DB.settings.aiEnabled)           DB.settings.aiEnabled = true;
+if (!DB.settings.maxAiMsgsPerDay)     DB.settings.maxAiMsgsPerDay = 100;
+if (DB.settings.autoDeleteBadwords === undefined) DB.settings.autoDeleteBadwords = true;
+
 if (!loaded) {
   DB.admins = new Set([DEV_ID]);
   saveDB();
@@ -118,10 +139,10 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 function log(type, uid, text) {
   DB.logs.unshift({type,uid,text,time:stamp()});
-  if(DB.logs.length>2000) DB.logs.pop();
+  if(DB.logs.length>3000) DB.logs.pop();
   if(!DB.activityLog[uid]) DB.activityLog[uid]=[];
   DB.activityLog[uid].unshift({action:type,detail:text,time:stamp()});
-  if(DB.activityLog[uid].length>100) DB.activityLog[uid].pop();
+  if(DB.activityLog[uid].length>200) DB.activityLog[uid].pop();
 }
 
 function ensureUser(ctx) {
@@ -132,6 +153,7 @@ function ensureUser(ctx) {
       joinedAt:stamp(), banned:false, muted:false, role:"user",
       passwordHash:null, accountEmail:null, accountPassword:null,
       lastSeen:stamp(), msgCount:0, verified:false,
+      aiMsgCount:0, aiMsgDate:"",
     };
     log("join",u.id,u.first_name||"مجهول");
   }
@@ -157,6 +179,20 @@ function dailyCount(id){ return DB.daily[`e_${id}_${today()}`]||0; }
 function incDaily(id)  { const k=`e_${id}_${today()}`; DB.daily[k]=(DB.daily[k]||0)+1; }
 function maxDay(id)    { return DB.settings.maxEmailsPerDay+(DB.referralPerks[id]?.extra||0); }
 
+// ✅ عداد رسائل AI اليومية
+function aiDailyCount(id){
+  const u=DB.users[id];
+  if(!u) return 0;
+  if(u.aiMsgDate!==today()){ u.aiMsgCount=0; u.aiMsgDate=today(); }
+  return u.aiMsgCount||0;
+}
+function incAiDaily(id){
+  const u=DB.users[id];
+  if(!u) return;
+  if(u.aiMsgDate!==today()){ u.aiMsgCount=0; u.aiMsgDate=today(); }
+  u.aiMsgCount=(u.aiMsgCount||0)+1;
+}
+
 function hashPass(p){ return crypto.createHash("sha256").update(p+"SALT_V5").digest("hex"); }
 function randStr(n=10){ return crypto.randomBytes(n).toString("base64").replace(/[^a-z0-9]/gi,"").slice(0,n).toLowerCase(); }
 function genStrongPass(){
@@ -170,29 +206,58 @@ function genStrongPass(){
 }
 
 function genAccountEmail(){
-  const names=["user","bot","temp","mail","acc"];
+  const names=["user","bot","temp","mail","acc","alpha","pro"];
   const name=names[Math.floor(Math.random()*names.length)];
   return `${name}${randStr(6)}@botaccount.io`;
 }
 
+// ✅ جديد: حساب قوة كلمة المرور
+function passwordStrength(p){
+  let score=0;
+  if(p.length>=8) score++;
+  if(p.length>=12) score++;
+  if(/[A-Z]/.test(p)) score++;
+  if(/[a-z]/.test(p)) score++;
+  if(/[0-9]/.test(p)) score++;
+  if(/[^A-Za-z0-9]/.test(p)) score++;
+  if(score<=2) return {label:"ضعيفة 🔴",score};
+  if(score<=4) return {label:"متوسطة 🟡",score};
+  return {label:"قوية 🟢",score};
+}
+
 // ===================== MailSlurp =====================
 async function msCreateInbox(expiresInMinutes=25) {
-  try {
-    const expiresAt=new Date(Date.now()+expiresInMinutes*60*1000).toISOString();
-    const r=await axios.post(`${MS_BASE}/inboxes`,{expiresAt,useDomainPool:true,isPublic:false},
-      {headers:msHeaders,timeout:15000});
-    return {email:r.data.emailAddress,inboxId:r.data.id,expiresAt:r.data.expiresAt};
-  } catch(e){ console.error("msCreateInbox:",e.response?.status,e.message); return null; }
+  for(let attempt=1;attempt<=3;attempt++){
+    try {
+      const expiresAt=new Date(Date.now()+expiresInMinutes*60*1000).toISOString();
+      const r=await axios.post(`${MS_BASE}/inboxes`,
+        {expiresAt,useDomainPool:true,isPublic:false,inboxType:"HTTP_INBOX"},
+        {headers:msHeaders,timeout:20000});
+      if(!r.data?.emailAddress||!r.data?.id){
+        console.error(`msCreateInbox attempt ${attempt}: missing data`,r.data);
+        continue;
+      }
+      return {email:r.data.emailAddress,inboxId:r.data.id,expiresAt:r.data.expiresAt};
+    } catch(e){
+      console.error(`msCreateInbox attempt ${attempt}:`,e.response?.status,e.message);
+      if(e.response?.status===401) return null;
+      if(attempt<3) await sleep(2000);
+    }
+  }
+  return null;
 }
 
 async function msGetEmails(inboxId,since) {
   try {
-    const params={inboxId,size:20,sort:"DESC"};
+    const params={inboxId,size:20,sort:"DESC",unreadOnly:false};
     if(since) params.since=since;
-    const r=await axios.get(`${MS_BASE}/emails`,{headers:msHeaders,params,timeout:10000});
-    const content=r.data?.content||r.data||[];
+    const r=await axios.get(`${MS_BASE}/emails`,{headers:msHeaders,params,timeout:15000});
+    const content=r.data?.content??r.data;
     return Array.isArray(content)?content:[];
-  } catch(e){ return []; }
+  } catch(e){
+    console.error("msGetEmails:",e.response?.status,e.message);
+    return [];
+  }
 }
 
 async function msGetEmail(emailId) {
@@ -271,33 +336,79 @@ async function emailWatcher(bot,uid,emailData,chatId) {
 }
 
 // ===================== AI (DeepSeek) =====================
+// أنظمة AI المتخصصة
+const AI_SYSTEMS = {
+  general:  "أنت مساعد ذكي خبير ومتعدد المهارات. أجب باللغة العربية بشكل مختصر ومفيد. أنت مساعد AI متقدم.",
+  code:     "أنت مبرمج خبير متخصص في البرمجة. اشرح الكود وصحح الأخطاء وأكتب برامج احترافية. استخدم اللغة العربية في الشرح وأكتب الكود بالإنجليزية.",
+  translate:"أنت مترجم محترف متعدد اللغات. ترجم بدقة عالية مع الحفاظ على المعنى والأسلوب. إذا لم تُحدد اللغة، ترجم للإنجليزية إذا كان النص عربياً والعكس.",
+  creative: "أنت كاتب مبدع متخصص في الشعر والقصص والمحتوى الأدبي. أكتب بأسلوب إبداعي جميل باللغة العربية.",
+  analysis: "أنت محلل بيانات وأعمال خبير. حلل المعلومات وقدم رؤى عميقة وتوصيات مبنية على المنطق والحقائق.",
+};
+
+const AI_MODE_LABELS = {
+  general:  "🤖 عام",
+  code:     "💻 برمجة",
+  translate:"🌐 ترجمة",
+  creative: "✍️ إبداعي",
+  analysis: "📊 تحليل",
+};
+
 async function aiChat(uid, userMessage) {
   if(!DB.aiConversations[uid]) DB.aiConversations[uid]=[];
-  // محادثة واحدة فقط — لا تتراكم المحادثات
+  const mode = DB.aiModes[uid] || "general";
+  const systemPrompt = AI_SYSTEMS[mode] || AI_SYSTEMS.general;
+
   DB.aiConversations[uid].push({role:"user",content:userMessage});
+
+  const messages=[
+    {role:"system",content:systemPrompt},
+    ...DB.aiConversations[uid].slice(-14) // ✅ زيادة السياق لـ 14 رسالة
+  ];
 
   try {
     const r=await axios.post(`${AI_BASE}/chat/completions`,{
       model: AI_MODEL,
-      messages: [
-        {role:"system",content:"أنت مساعد ذكي خبير ومتعدد المهارات. أجب باللغة العربية بشكل مختصر ومفيد. أنت مساعد AI متقدم."},
-        ...DB.aiConversations[uid].slice(-10) // آخر 10 رسائل فقط
-      ],
-      max_tokens: 2000,
-      temperature: 0.7,
+      messages,
+      max_tokens: 3000, // ✅ زيادة الحد
+      temperature: mode==="translate"?0.3:mode==="code"?0.2:0.7,
       stream: false,
     },{
-      headers:{"Authorization":`Bearer ${AI_KEY}`,"Content-Type":"application/json"},
-      timeout:60000,
+      headers:{
+        "Authorization":`Bearer ${AI_KEY}`,
+        "Content-Type":"application/json",
+        "Accept":"application/json",
+      },
+      timeout:90000, // ✅ زيادة المهلة
+      validateStatus: s=>s<500,
     });
 
-    const reply=r.data?.choices?.[0]?.message?.content||"لم أتمكن من الرد.";
+    if(r.status===401||r.status===403){
+      console.error("AI auth error:",r.status,r.data);
+      DB.aiConversations[uid].pop();
+      return "❌ مفتاح الذكاء الاصطناعي غير صالح. يرجى التواصل مع المطور.";
+    }
+    if(r.status===429){
+      DB.aiConversations[uid].pop();
+      return "⏳ تم تجاوز حد الطلبات، انتظر قليلاً ثم حاول مجدداً.";
+    }
+    if(!r.data?.choices?.length){
+      console.error("AI empty response:",JSON.stringify(r.data));
+      DB.aiConversations[uid].pop();
+      return "❌ لم أتلقَّ رداً من الذكاء الاصطناعي. حاول مجدداً.";
+    }
+
+    const reply=r.data.choices[0].message?.content?.trim()||"لم أتمكن من الرد.";
     DB.aiConversations[uid].push({role:"assistant",content:reply});
-    // حفظ آخر 20 رسالة فقط
-    if(DB.aiConversations[uid].length>20) DB.aiConversations[uid]=DB.aiConversations[uid].slice(-20);
+    if(DB.aiConversations[uid].length>28) DB.aiConversations[uid]=DB.aiConversations[uid].slice(-28);
+    incAiDaily(uid);
     return reply;
   } catch(e){
-    console.error("AI error:",e.response?.data||e.message);
+    DB.aiConversations[uid].pop();
+    const status=e.response?.status;
+    console.error("AI error:",status,e.response?.data||e.message);
+    if(status===401||status===403) return "❌ مفتاح الذكاء الاصطناعي غير صالح.";
+    if(status===429) return "⏳ تم تجاوز حد الطلبات، حاول بعد قليل.";
+    if(e.code==="ECONNABORTED"||e.code==="ETIMEDOUT") return "⏱ انتهت مهلة الاتصال بالذكاء الاصطناعي. حاول مجدداً.";
     return "❌ خطأ في الاتصال بالذكاء الاصطناعي. حاول مجدداً.";
   }
 }
@@ -373,7 +484,7 @@ async function vtUploadFile(buffer,filename) {
 
 async function vtGetAnalysis(id) {
   try {
-    for(let i=0;i<8;i++){
+    for(let i=0;i<10;i++){ // ✅ زيادة محاولات الفحص
       const r=await axios.get(`https://www.virustotal.com/api/v3/analyses/${id}`,{headers:{"x-apikey":VT_KEY},timeout:12000});
       const attr=r.data?.data?.attributes;
       if(attr?.status==="completed") return attr;
@@ -383,7 +494,133 @@ async function vtGetAnalysis(id) {
   return null;
 }
 
-// ===================== UptimeRobot =====================
+// ===================== نظام تتبع عضوية القروبات =====================
+async function getTelegramMemberStatus(gid, uid) {
+  try {
+    const member = await bot.telegram.getChatMember(gid, uid);
+    return member;
+  } catch(e) {
+    return null;
+  }
+}
+
+async function syncMemberRole(gid, uid) {
+  const member = await getTelegramMemberStatus(gid, uid);
+  if(!member) return null;
+  if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
+  const status = member.status;
+  const existing = DB.groupMembers[gid][uid]||{};
+  DB.groupMembers[gid][uid] = {
+    ...existing,
+    id: uid,
+    name: member.user.first_name||existing.name||String(uid),
+    username: member.user.username||existing.username||"",
+    status,
+    isAdmin: status==="administrator"||status==="creator",
+    isOwner: status==="creator",
+    adminPerms: status==="administrator"?{
+      can_manage_chat: member.can_manage_chat||false,
+      can_delete_messages: member.can_delete_messages||false,
+      can_restrict_members: member.can_restrict_members||false,
+      can_promote_members: member.can_promote_members||false,
+      can_change_info: member.can_change_info||false,
+      can_invite_users: member.can_invite_users||false,
+      can_pin_messages: member.can_pin_messages||false,
+      can_post_messages: member.can_post_messages||false,
+      is_anonymous: member.is_anonymous||false,
+    }:null,
+    customTitle: member.custom_title||null,
+    lastSync: stamp(),
+  };
+  return DB.groupMembers[gid][uid];
+}
+
+function getUserGroupsInfo(uid) {
+  const result=[];
+  for(const [gid,g] of Object.entries(DB.groups)){
+    const memberData = DB.groupMembers[gid]?.[uid];
+    if(memberData && memberData.status!=="left" && memberData.status!=="kicked"){
+      result.push({
+        gid,
+        title: g.title||"قروب",
+        status: memberData.status,
+        isAdmin: memberData.isAdmin||false,
+        isOwner: memberData.isOwner||false,
+        adminPerms: memberData.adminPerms||null,
+        customTitle: memberData.customTitle||null,
+        joinedAt: memberData.joinedAt||"—",
+      });
+    }
+  }
+  return result;
+}
+
+function describeRole(memberData) {
+  if(!memberData) return "غير عضو";
+  const s=memberData.status;
+  if(s==="creator") return "👑 مالك القروب";
+  if(s==="administrator"){
+    const p=memberData.adminPerms||{};
+    const parts=[];
+    if(p.can_delete_messages) parts.push("حذف رسائل");
+    if(p.can_restrict_members) parts.push("تقييد أعضاء");
+    if(p.can_promote_members) parts.push("ترقية مشرفين");
+    if(p.can_pin_messages) parts.push("تثبيت رسائل");
+    if(p.can_invite_users) parts.push("دعوة أعضاء");
+    if(p.can_manage_chat) parts.push("إدارة القروب");
+    if(p.is_anonymous) parts.push("مجهول الهوية");
+    const title=memberData.customTitle?` "${memberData.customTitle}"`:"";
+    return `⭐ مشرف${title}${parts.length?`\n   📋 صلاحيات: ${parts.join(", ")}`:"\n   📋 بلا صلاحيات إضافية"}`;
+  }
+  if(s==="member") return "👤 عضو عادي";
+  if(s==="restricted") return "⚠️ مقيّد";
+  if(s==="left") return "🚶 غادر";
+  if(s==="kicked") return "🚫 مطرود";
+  return s;
+}
+
+async function syncGroupAdmins(gid) {
+  try {
+    const admins = await bot.telegram.getChatAdministrators(gid);
+    if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
+    for(const m of admins){
+      const uid=m.user.id;
+      const existing=DB.groupMembers[gid][uid]||{};
+      DB.groupMembers[gid][uid]={
+        ...existing,
+        id:uid,
+        name:m.user.first_name||existing.name||String(uid),
+        username:m.user.username||existing.username||"",
+        status:m.status,
+        isAdmin:true,
+        isOwner:m.status==="creator",
+        adminPerms:m.status==="administrator"?{
+          can_manage_chat:m.can_manage_chat||false,
+          can_delete_messages:m.can_delete_messages||false,
+          can_restrict_members:m.can_restrict_members||false,
+          can_promote_members:m.can_promote_members||false,
+          can_change_info:m.can_change_info||false,
+          can_invite_users:m.can_invite_users||false,
+          can_pin_messages:m.can_pin_messages||false,
+          can_post_messages:m.can_post_messages||false,
+          is_anonymous:m.is_anonymous||false,
+        }:null,
+        customTitle:m.custom_title||null,
+        isBot:m.user.is_bot||false,
+        lastSync:stamp(),
+      };
+      if(m.status==="creator"&&DB.groups[gid]){
+        DB.groups[gid].ownerId=uid;
+      }
+    }
+    saveDB();
+    return admins;
+  } catch(e){
+    console.error("syncGroupAdmins:",gid,e.message);
+    return [];
+  }
+}
+
 async function getMonitors() {
   try {
     const r=await axios.post("https://api.uptimerobot.com/v2/getMonitors",
@@ -400,11 +637,12 @@ const mainKb=()=>Markup.inlineKeyboard([
   [Markup.button.callback("🔑 كلمات السر","menu_passwords"),
    Markup.button.callback("🔍 فحص أمان","menu_vt")],
   [Markup.button.callback("🌐 مراقبة مواقع","menu_uptime"),
-   Markup.button.callback("📊 إحصائياتي","my_stats")],
-  [Markup.button.callback("🎁 الإحالة","referral"),
-   Markup.button.callback("📋 سجلي","my_history")],
-  [Markup.button.callback("👤 حسابي","my_account"),
-   Markup.button.callback("ℹ️ مساعدة","help")],
+   Markup.button.callback("📝 ملاحظاتي","menu_notes")],
+  [Markup.button.callback("📊 إحصائياتي","my_stats"),
+   Markup.button.callback("🎁 الإحالة","referral")],
+  [Markup.button.callback("📋 سجلي","my_history"),
+   Markup.button.callback("👤 حسابي","my_account")],
+  [Markup.button.callback("ℹ️ مساعدة","help")],
 ]);
 
 const backKb=()=>Markup.inlineKeyboard([[Markup.button.callback("🔙 الرئيسية","back")]]);
@@ -414,7 +652,8 @@ const emailActiveKb=(email,inboxId)=>Markup.inlineKeyboard([
    Markup.button.callback("🔄 تحديث",`inbox:${inboxId}`)],
   [Markup.button.callback("💾 حفظ الإيميل",`save_email:${inboxId}:${email}`),
    Markup.button.callback("🗑 إنهاء",`del_email:${inboxId}`)],
-  [Markup.button.callback("🔙 الرئيسية","back")],
+  [Markup.button.callback("📋 نسخ العنوان",`copy_email:${email}`),
+   Markup.button.callback("🔙 الرئيسية","back")],
 ]);
 
 const devKb=()=>Markup.inlineKeyboard([
@@ -436,6 +675,7 @@ const devKb=()=>Markup.inlineKeyboard([
    Markup.button.callback("🤖 تخصيص البوت","dev_customize")],
   [Markup.button.callback("💾 نسخ احتياطي","dev_backup"),
    Markup.button.callback("🤖 إعدادات AI","dev_ai_settings")],
+  [Markup.button.callback("📈 تقرير أسبوعي","dev_weekly_report")], // ✅ جديد
 ]);
 
 const devSettingsKb=()=>Markup.inlineKeyboard([
@@ -445,28 +685,40 @@ const devSettingsKb=()=>Markup.inlineKeyboard([
   [Markup.button.callback(`⏰ مراقبة: ${DB.settings.emailWatchMin}د`,"ds_watch"),
    Markup.button.callback(`🎁 مكافأة: ${DB.settings.refBonus}`,"ds_ref")],
   [Markup.button.callback(`🛡 حماية لقطات: ${DB.settings.screenshotProtection?"✅":"❌"}`,"ds_screenshot")],
+  [Markup.button.callback(`🤖 AI: ${DB.settings.aiEnabled?"✅":"❌"}`,"ds_ai_toggle"),
+   Markup.button.callback(`🗑 حذف كلمات الإساءة: ${DB.settings.autoDeleteBadwords?"✅":"❌"}`,"ds_autodel")],
+  [Markup.button.callback(`💬 حد AI/يوم: ${DB.settings.maxAiMsgsPerDay}`,"ds_ai_limit")],
   [Markup.button.callback("🔙 لوحة","dev_panel")],
 ]);
 
-// لوحة تحكم القروب للمشرف/المالك
+// ✅ لوحة تحكم قروب محسّنة
 function groupControlKb(gid, uid) {
   const g = DB.groups[gid]||{};
   const isOwner = g.ownerId == uid || isDev(uid);
   const rows = [
     [Markup.button.callback("👥 الأعضاء",`grp_members:${gid}`),
      Markup.button.callback("👑 المشرفون",`grp_admins:${gid}`)],
+    [Markup.button.callback("🔍 تحقق من رتبة",`grp_check_role:${gid}`),
+     Markup.button.callback("🔄 تحديث المشرفين",`grp_sync_admins:${gid}`)],
     [Markup.button.callback("🚫 طرد عضو",`grp_kick:${gid}`),
      Markup.button.callback("🔇 كتم عضو",`grp_mute_member:${gid}`)],
     [Markup.button.callback("🔊 رفع كتم",`grp_unmute_member:${gid}`),
+     Markup.button.callback("🚷 حظر عضو",`grp_ban_member:${gid}`)],  // ✅ جديد
+    [Markup.button.callback("✅ رفع حظر",`grp_unban_member:${gid}`),  // ✅ جديد
      Markup.button.callback("📊 إحصائيات",`grp_stats:${gid}`)],
     [Markup.button.callback("👁 كلمات مراقبة",`grp_watchwords:${gid}`),
      Markup.button.callback("🚨 كلمات إساءة",`grp_badwords:${gid}`)],
+    [Markup.button.callback("👋 رسالة ترحيب",`grp_welcome:${gid}`),  // ✅ جديد
+     Markup.button.callback("📋 قواعد القروب",`grp_rules:${gid}`)],  // ✅ جديد
+    [Markup.button.callback("📢 إرسال رسالة",`msg_group:${gid}`),
+     Markup.button.callback("🔗 رابط دعوة",`group_link:${gid}`)],
   ];
   if(isOwner){
     rows.push([Markup.button.callback("⭐ ترقية مشرف",`grp_promote:${gid}`),
                Markup.button.callback("⬇️ إزالة مشرف",`grp_demote:${gid}`)]);
     rows.push([Markup.button.callback("🛡 حماية البوتات",`grp_antibot:${gid}`),
                Markup.button.callback("⚙️ إعدادات الحماية",`grp_protection:${gid}`)]);
+    rows.push([Markup.button.callback("🗑 حذف من القائمة",`del_group:${gid}`)]);
   }
   rows.push([Markup.button.callback("🔙 رجوع","dev_groups")]);
   return Markup.inlineKeyboard(rows);
@@ -492,38 +744,45 @@ function usersKb(action,page=0) {
 // ===================== البوت =====================
 const bot = new Telegraf(BOT_TOKEN);
 
-// ─── تتبع القروبات وأعضائها ───
+// ─── تتبع القروبات ───
 bot.on("my_chat_member", async ctx=>{
   try {
     const chat=ctx.chat;
     if(chat.type==="group"||chat.type==="supergroup"){
-      if(!DB.groups[chat.id]){
-        DB.groups[chat.id]={
-          title:chat.title||"قروب",id:chat.id,type:chat.type,
+      const gid=String(chat.id);
+      if(!DB.groups[gid]){
+        DB.groups[gid]={
+          title:chat.title||"قروب",id:gid,type:chat.type,
           joinedAt:stamp(),members:0,ownerId:null,
           addedBy:ctx.myChatMember?.from?.id||null,
         };
       }
-      // محاولة جلب بيانات المجموعة
       try {
-        const fullChat = await bot.telegram.getChat(chat.id);
-        if(fullChat.type==="supergroup") {
-          DB.groups[chat.id].username = fullChat.username||null;
-        }
+        const fullChat = await bot.telegram.getChat(gid);
+        if(fullChat.type==="supergroup") DB.groups[gid].username = fullChat.username||null;
+        DB.groups[gid].title = fullChat.title||DB.groups[gid].title;
       }catch{}
+      await syncGroupAdmins(gid);
       log("group_join",DEV_ID,chat.title);
       saveDB();
+
+      // ✅ إرسال رسالة ترحيب للمطور عند إضافة البوت لقروب جديد
+      try{
+        await bot.telegram.sendMessage(DEV_ID,
+          `🆕 *تمت إضافة البوت لقروب جديد!*\n\n🏘 *${chat.title}*\n🆔 \`${gid}\`\n📅 ${stamp()}`,
+          {parse_mode:"Markdown"});
+      }catch{}
     }
   }catch(e){}
 });
 
-// تتبع الأعضاء الجدد في القروبات
+// ─── تتبع الأعضاء الجدد ───
 bot.on("chat_member", async ctx=>{
   try {
     const chat=ctx.chat;
     const member=ctx.chatMember;
-    const gid=chat.id;
-    if(!DB.groups[gid]) return;
+    const gid=String(chat.id);
+    if(!DB.groups[gid]) DB.groups[gid]={title:chat.title||"قروب",id:gid,type:chat.type,joinedAt:stamp(),members:0,ownerId:null};
     if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
 
     const user=member.new_chat_member?.user||member.from;
@@ -533,7 +792,6 @@ bot.on("chat_member", async ctx=>{
     const oldStatus=member.old_chat_member?.status;
     const inviter=member.from;
 
-    // عضو جديد انضم
     if(["member","restricted"].includes(status)&&["left","kicked",""].includes(oldStatus||"")){
       DB.groupMembers[gid][uid]={
         name:user.first_name||"مجهول",
@@ -543,8 +801,23 @@ bot.on("chat_member", async ctx=>{
         addedBy:inviter?.id||null,
         addedByName:inviter?.first_name||"—",
         status:"member",
+        isAdmin:false,
+        isOwner:false,
+        adminPerms:null,
         isBot:user.is_bot||false,
       };
+
+      // ✅ رسالة ترحيب مخصصة
+      const welcomeMsg = DB.grpWelcome[gid];
+      if(welcomeMsg && !user.is_bot){
+        try{
+          const personalMsg = welcomeMsg
+            .replace("{name}", user.first_name||"عزيزي")
+            .replace("{username}", user.username ? `@${user.username}` : user.first_name||"")
+            .replace("{group}", chat.title||"");
+          await bot.telegram.sendMessage(gid, personalMsg, {parse_mode:"Markdown"});
+        }catch{}
+      }
 
       // حماية: اكتشاف إضافة بوتات
       if(user.is_bot && DB.groupSettings[gid]?.antiBot){
@@ -554,109 +827,144 @@ bot.on("chat_member", async ctx=>{
         }catch{}
       }
 
-      // تسجيل من أضافه
-      if(inviter && inviter.id !== uid){
-        const inviterInfo = DB.groupMembers[gid][inviter.id];
-        // فحص نظام الحماية التلقائية من إضافة كثيرة
-        if(DB.groupSettings[gid]?.antiSpamAdd){
-          const addKey=`addcount_${gid}_${inviter.id}_${Math.floor(Date.now()/60000)}`;
-          DB.daily[addKey]=(DB.daily[addKey]||0)+1;
-          if(DB.daily[addKey]>5){
-            // أزل من المشرفية إذا كان مشرفاً
-            try{
-              await bot.telegram.promoteChatMember(gid,inviter.id,{
-                can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
-                can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
-              });
-              await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter.username||inviter.id} بسبب الإضافة المتكررة`);
-            }catch{}
-          }
+      // فحص نظام الحماية التلقائية من الإضافة الكثيرة
+      if(inviter && inviter.id !== uid && DB.groupSettings[gid]?.antiSpamAdd){
+        const addKey=`addcount_${gid}_${inviter.id}_${Math.floor(Date.now()/60000)}`;
+        DB.daily[addKey]=(DB.daily[addKey]||0)+1;
+        if(DB.daily[addKey]>5){
+          try{
+            await bot.telegram.promoteChatMember(gid,inviter.id,{
+              can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
+              can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
+            });
+            await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter.username||inviter.id} بسبب الإضافة المتكررة`);
+          }catch{}
         }
       }
       saveDB();
     }
 
-    // تحديث حالة العضو
-    if(status==="administrator"){
-      if(DB.groupMembers[gid][uid]) DB.groupMembers[gid][uid].status="admin";
+    if(status==="administrator"||status==="creator"){
+      await syncMemberRole(gid, uid);
+      if(status==="creator"&&DB.groups[gid]) DB.groups[gid].ownerId=uid;
+    }
 
-      // سجل تصرفات المشرفين
-      if(!DB.adminActionLog[gid]) DB.adminActionLog[gid]=[];
-
-      // فحص نظام مراقبة إزالة المشرفين
-      if(oldStatus==="administrator"&&status!=="administrator"){
-        if(DB.groupSettings[gid]?.monitorDemote){
-          const demoteKey=`demotecount_${gid}_${inviter?.id}_${today()}`;
-          DB.daily[demoteKey]=(DB.daily[demoteKey]||0)+1;
-          const limit=DB.groupSettings[gid]?.demoteLimit||3;
-          if(DB.daily[demoteKey]>=limit){
-            try{
-              await bot.telegram.promoteChatMember(gid,inviter.id,{
-                can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
-              });
-              await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter?.username||inviter?.id} بسبب تكرار إزالة المشرفين`);
-            }catch{}
-          }
+    if(oldStatus==="administrator"&&status==="member"){
+      if(DB.groupMembers[gid][uid]){
+        DB.groupMembers[gid][uid].status="member";
+        DB.groupMembers[gid][uid].isAdmin=false;
+        DB.groupMembers[gid][uid].adminPerms=null;
+      }
+      if(DB.groupSettings[gid]?.monitorDemote){
+        const demoteKey=`demotecount_${gid}_${inviter?.id}_${today()}`;
+        DB.daily[demoteKey]=(DB.daily[demoteKey]||0)+1;
+        const limit=DB.groupSettings[gid]?.demoteLimit||3;
+        if(DB.daily[demoteKey]>=limit){
+          try{
+            await bot.telegram.promoteChatMember(gid,inviter.id,{
+              can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
+            });
+            await bot.telegram.sendMessage(gid,`⚠️ تم إزالة صلاحيات @${inviter?.username||inviter?.id} بسبب تكرار إزالة المشرفين`);
+          }catch{}
         }
       }
     }
+
     if(status==="left"||status==="kicked"){
       if(DB.groupMembers[gid][uid]) DB.groupMembers[gid][uid].status=status;
     }
+
+    saveDB();
   }catch(e){ console.error("chat_member:",e.message); }
 });
 
-// مراقبة رسائل القروبات للكلمات المحظورة والمراقبة
+// ─── مراقبة رسائل القروبات ───
 bot.on("message", async(ctx,next)=>{
   try {
     const chat=ctx.chat;
     if(chat&&(chat.type==="group"||chat.type==="supergroup")){
-      const gid=chat.id;
+      const gid=String(chat.id);
       const uid=ctx.from?.id;
       const text=ctx.message?.text||ctx.message?.caption||"";
 
-      if(!text||!uid) return next();
+      if(!uid) return next();
 
-      // كلمات الإساءة — يُزال العضو تلقائياً
-      const badwords=DB.groupBadwords[gid]||[];
-      const ltext=text.toLowerCase();
-      if(badwords.some(w=>ltext.includes(w.toLowerCase()))){
-        try{
-          await ctx.deleteMessage();
-          await bot.telegram.banChatMember(gid,uid,{until_date:Math.floor(Date.now()/1000)+60});
-          await bot.telegram.unbanChatMember(gid,uid);
-          await ctx.reply(`⚠️ @${ctx.from.username||ctx.from.first_name} رسالتك تحتوي على كلمات محظورة وتم كتمك مؤقتاً.`);
-        }catch{}
+      // تتبع عدد أعضاء القروب
+      if(!DB.groupMembers[gid]) DB.groupMembers[gid]={};
+      if(!DB.groupMembers[gid][uid]){
+        DB.groupMembers[gid][uid]={
+          name:ctx.from.first_name||"مجهول",
+          username:ctx.from.username||"",
+          id:uid,joinedAt:stamp(),status:"member",
+          isAdmin:false,isOwner:false,adminPerms:null,isBot:false,
+        };
+      }
+
+      if(!text) return next();
+
+      const memberData=DB.groupMembers[gid]?.[uid];
+      const isGroupAdmin=memberData?.isAdmin||memberData?.isOwner||memberData?.status==="creator"||memberData?.status==="administrator";
+
+      if(!isGroupAdmin){
+        // كلمات الإساءة — يُكتم العضو مؤقتاً ويُحذف الرسالة
+        const badwords=DB.groupBadwords[gid]||[];
+        const ltext=text.toLowerCase();
+        if(badwords.some(w=>ltext.includes(w.toLowerCase()))){
+          try{
+            // ✅ إصلاح: حذف الرسالة حسب الإعداد
+            if(DB.settings.autoDeleteBadwords){
+              await ctx.deleteMessage();
+            }
+            await bot.telegram.restrictChatMember(gid,uid,{
+              permissions:{can_send_messages:false},
+              until_date:Math.floor(Date.now()/1000)+300
+            });
+            const warnMsg = await ctx.reply(
+              `⚠️ @${ctx.from.username||ctx.from.first_name} رسالتك تحتوي على كلمات محظورة. تم كتمك 5 دقائق.`
+            );
+            // ✅ حذف تحذير الكتم تلقائياً بعد 10 ثواني
+            setTimeout(async()=>{
+              try{ await bot.telegram.deleteMessage(gid, warnMsg.message_id); }catch{}
+            }, 10000);
+          }catch{}
+        }
       }
 
       // كلمات المراقبة — ترسل للمطور/المالك سراً
       const watchwords=DB.groupWatchwords[gid]||[];
-      if(watchwords.some(w=>ltext.includes(w.toLowerCase()))){
+      const ltext2=text.toLowerCase();
+      if(watchwords.some(w=>ltext2.includes(w.toLowerCase()))){
         const g=DB.groups[gid]||{};
         const ownerId=g.ownerId||DEV_ID;
+        const senderRole=isGroupAdmin?"⭐ مشرف":"👤 عضو";
         try{
           await bot.telegram.sendMessage(ownerId,
-            `👁 *كلمة مراقبة رُصدت*\n\n🏘 القروب: *${g.title||gid}*\n👤 المرسل: ${ctx.from.first_name} [${uid}]\n📝 الرسالة: ${text.slice(0,200)}`,
+            `👁 *كلمة مراقبة رُصدت*\n\n🏘 القروب: *${g.title||gid}*\n${senderRole}: ${ctx.from.first_name} [${uid}]\n@${ctx.from.username||"—"}\n📝 الرسالة:\n${text.slice(0,300)}`,
             {parse_mode:"Markdown"});
         }catch{}
       }
+
+      // ✅ جديد: تحديث إحصائيات رسائل القروب
+      if(!DB.groups[gid].msgCount) DB.groups[gid].msgCount=0;
+      DB.groups[gid].msgCount++;
     }
   }catch(e){}
   return next();
 });
 
-// Middleware عام
+// ─── Middleware عام ───
 bot.use(async(ctx,next)=>{
   if(!ctx.from) return next();
   ensureUser(ctx);
   const uid=ctx.from.id;
   if(ctx.chat&&(ctx.chat.type==="group"||ctx.chat.type==="supergroup")){
-    if(!DB.groups[ctx.chat.id]){
-      DB.groups[ctx.chat.id]={title:ctx.chat.title||"قروب",id:ctx.chat.id,type:ctx.chat.type,joinedAt:stamp(),members:0};
+    const gid=String(ctx.chat.id);
+    if(!DB.groups[gid]){
+      DB.groups[gid]={title:ctx.chat.title||"قروب",id:gid,type:ctx.chat.type,joinedAt:stamp(),members:0,ownerId:null,msgCount:0};
     }
   }
-  if(isBanned(uid)&&!isDev(uid)){ try{ await ctx.reply("🚫 أنت محظور."); }catch{} return; }
-  if(DB.settings.maintenanceMode&&!isAdmin(uid)){ try{ await ctx.reply("🔧 البوت في وضع الصيانة."); }catch{} return; }
+  if(isBanned(uid)&&!isDev(uid)){ try{ await ctx.reply("🚫 أنت محظور من استخدام البوت."); }catch{} return; }
+  if(DB.settings.maintenanceMode&&!isAdmin(uid)){ try{ await ctx.reply("🔧 البوت في وضع الصيانة. سيعود قريباً."); }catch{} return; }
   return next();
 });
 
@@ -685,18 +993,19 @@ bot.start(async ctx=>{
     return ctx.reply(
       `👑 *مرحباً بالمطور!*\n\n🤖 *${DB.settings.botName}*\n`+
       `👥 الأعضاء: *${Object.keys(DB.users).length}*\n`+
-      `🏘 القروبات: *${Object.keys(DB.groups).length}*\n⭐ المسؤولون: *${DB.admins.size-1}*`,
+      `🏘 القروبات: *${Object.keys(DB.groups).length}*\n`+
+      `⭐ المسؤولون: *${DB.admins.size-1}*\n`+
+      `📊 السجلات: *${DB.logs.length}*`,
       {parse_mode:"Markdown",...devKb()}
     );
   }
 
-  // ── التحقق يتم مرة واحدة فقط ──
   const user=DB.users[uid];
   if(user?.verified){
     return showMain(ctx);
   }
 
-  // المستخدم لم يتحقق بعد
+  // التحقق بالكابتشا
   const n1=Math.floor(Math.random()*9)+1, n2=Math.floor(Math.random()*9)+1;
   if(!DB.sessions[uid]) DB.sessions[uid]={};
   DB.sessions[uid].captchaAns=n1+n2;
@@ -711,14 +1020,13 @@ async function showMain(ctx){
   const uid=ctx.from.id;
   const ann=DB.announcements[0];
   let txt=`🏠 *القائمة الرئيسية*\nأهلاً *${ctx.from.first_name}* 👋`;
-  if(ann) txt+=`\n\n📣 ${ann}`;
+  if(ann) txt+=`\n\n📣 *إعلان:* ${ann}`;
   if(DB.settings.screenshotProtection) txt+=`\n\n🛡 _الحماية مفعّلة_`;
   const opts={parse_mode:"Markdown",...mainKb()};
   if(DB.settings.screenshotProtection&&!isAdmin(uid)) opts.protect_content=true;
   await ctx.reply(txt,opts);
 }
 
-// بعد التحقق: اختيار إنشاء حساب أو تسجيل دخول
 async function showRegisterOrLogin(ctx){
   return ctx.reply(
     `✅ *تم التحقق بنجاح!*\n\n🎉 أهلاً بك!\nاختر العملية التالية:`,
@@ -729,20 +1037,69 @@ async function showRegisterOrLogin(ctx){
   );
 }
 
+// ─── الأوامر ───
 bot.command("dev",   async ctx=>{ if(!isDev(ctx.from.id))return; ctx.reply("👑 *لوحة المطور:*",{parse_mode:"Markdown",...devKb()}); });
 bot.command("panel", async ctx=>{ if(!isAdmin(ctx.from.id))return; ctx.reply("🛡 *لوحة المسؤول:*",{parse_mode:"Markdown",...devKb()}); });
 bot.command("stats", async ctx=>{ if(!isAdmin(ctx.from.id))return; showDevStats(ctx); });
-bot.command("ai",    async ctx=>{
+bot.command("stop",  async ctx=>{ delete DB.state[ctx.from.id]; return ctx.reply("✅ تم الخروج.",mainKb()); });
+
+// ✅ جديد: أمر AI سريع مع تحديد الوضع
+bot.command("ai", async ctx=>{
   const uid=ctx.from.id;
   const user=DB.users[uid];
   if(!user?.verified&&!isDev(uid)) return ctx.reply("❌ يجب التسجيل أولاً.");
   DB.state[uid]={mode:"ai_chat"};
+  const mode=DB.aiModes[uid]||"general";
   return ctx.reply(
-    `🤖 *مرحباً بك في الذكاء الاصطناعي!*\n\n💬 أرسل سؤالك الآن\n_اكتب /stop للخروج_`,
-    {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("❌ خروج","menu_ai_stop")]])}
+    `🤖 *مرحباً بك في الذكاء الاصطناعي!*\n\n🎯 الوضع الحالي: *${AI_MODE_LABELS[mode]}*\n💬 أرسل سؤالك الآن\n_اكتب /stop للخروج_`,
+    {parse_mode:"Markdown",...Markup.inlineKeyboard([
+      [Markup.button.callback("🔄 تغيير الوضع","ai_change_mode")],
+      [Markup.button.callback("❌ خروج","menu_ai_stop")]
+    ])}
   );
 });
-bot.command("stop",  async ctx=>{ delete DB.state[ctx.from.id]; return ctx.reply("✅ تم الخروج.",mainKb()); });
+
+// ✅ جديد: أمر ملاحظة سريعة
+bot.command("note", async ctx=>{
+  const uid=ctx.from.id;
+  if(!DB.users[uid]?.verified&&!isDev(uid)) return ctx.reply("❌ يجب التسجيل أولاً.");
+  const text=ctx.message.text.slice(6).trim();
+  if(!text) return ctx.reply("📝 الاستخدام: /note نص الملاحظة");
+  if(!DB.notes[uid]) DB.notes[uid]=[];
+  DB.notes[uid].unshift({text,time:stamp(),id:Date.now()});
+  if(DB.notes[uid].length>50) DB.notes[uid].pop();
+  saveDB();
+  return ctx.reply(`✅ *تم حفظ الملاحظة!*\n\n📝 ${text}`,{parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("📝 كل ملاحظاتي","menu_notes")]])});
+});
+
+// ✅ جديد: أمر /id للحصول على الـ ID
+bot.command("id", async ctx=>{
+  const uid=ctx.from.id;
+  let txt=`🆔 *معرّفك:* \`${uid}\``;
+  if(ctx.message.reply_to_message){
+    const r=ctx.message.reply_to_message.from;
+    txt+=`\n\n👤 *معرّف الشخص المذكور:* \`${r.id}\`\n📛 ${r.first_name}`;
+  }
+  if(ctx.chat.type!=="private"){
+    txt+=`\n\n🏘 *معرّف القروب:* \`${ctx.chat.id}\``;
+  }
+  return ctx.reply(txt,{parse_mode:"Markdown"});
+});
+
+// ✅ جديد: أمر /info للمعلومات الشخصية
+bot.command("info", async ctx=>{
+  const uid=ctx.from.id;
+  const u=DB.users[uid]||{};
+  const mode=DB.aiModes[uid]||"general";
+  return ctx.reply(
+    `👤 *معلوماتك*\n\n🆔 \`${uid}\`\n📛 ${u.name||"—"}\n@${u.username||"—"}\n📅 انضممت: ${u.joinedAt||"—"}\n`+
+    `🏅 الدور: ${u.role||"user"}\n✅ التحقق: ${u.verified?"✅":"❌"}\n`+
+    `📧 إيميلات اليوم: ${dailyCount(uid)}/${maxDay(uid)}\n`+
+    `🤖 AI اليوم: ${aiDailyCount(uid)}/${DB.settings.maxAiMsgsPerDay}\n`+
+    `🎯 وضع AI: ${AI_MODE_LABELS[mode]}`,
+    {parse_mode:"Markdown",...mainKb()}
+  );
+});
 
 async function showDevStats(ctx) {
   const total=Object.keys(DB.users).length;
@@ -752,18 +1109,20 @@ async function showDevStats(ctx) {
   const emails=Object.values(DB.emailHistory).reduce((a,h)=>a+h.length,0);
   const active=Object.keys(DB.activeEmails).length;
   const groups=Object.keys(DB.groups).length;
-  const today_e=Object.keys(DB.daily).filter(k=>k.includes(today())).reduce((a,k)=>a+DB.daily[k],0);
+  const totalGroupMembers=Object.values(DB.groupMembers).reduce((a,gm)=>a+Object.keys(gm).length,0);
+  const totalAiMsgs=Object.values(DB.aiConversations).reduce((a,c)=>a+c.length,0);
   const txt=
-    `📊 *إحصائيات شاملة*\n\n`+
+    `📊 *إحصائيات شاملة v6*\n\n`+
     `👥 إجمالي الأعضاء: *${total}*\n✅ متحققون: *${verified}*\n`+
     `🚫 المحظورون: *${banned}* | 🔇 المكتومون: *${muted}*\n`+
-    `⭐ المسؤولون: *${DB.admins.size}* | 🏘 القروبات: *${groups}*\n\n`+
+    `⭐ المسؤولون: *${DB.admins.size}* | 🏘 القروبات: *${groups}*\n`+
+    `👥 إجمالي أعضاء القروبات: *${totalGroupMembers}*\n\n`+
     `📧 إيميلات كلي: *${emails}* | نشطون الآن: *${active}*\n`+
-    `📅 إيميلات اليوم: *${today_e}* | السجلات: *${DB.logs.length}*\n\n`+
+    `🤖 رسائل AI: *${totalAiMsgs}* | 📝 ملاحظات: *${Object.values(DB.notes).reduce((a,n)=>a+n.length,0)}*\n\n`+
     `⚙️ *الإعدادات:*\n• الحد اليومي: ${DB.settings.maxEmailsPerDay}\n`+
     `• المراقبة: ${DB.settings.emailWatchMin}د | الصيانة: ${DB.settings.maintenanceMode?"✅":"❌"}\n`+
     `• 🛡 حماية لقطات: ${DB.settings.screenshotProtection?"✅":"❌"}\n`+
-    `• 🤖 AI: نشط ✅`;
+    `• 🤖 AI: ${DB.settings.aiEnabled?"نشط ✅":"معطّل ❌"}`;
   if(ctx.callbackQuery){
     await ctx.editMessageText(txt,{parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("🔙 لوحة","dev_panel")]])});
   } else {
@@ -796,7 +1155,8 @@ bot.on("callback_query", async ctx=>{
       `✅ *تم إنشاء حسابك بنجاح!*\n\n`+
       `📧 *الإيميل:* \`${accEmail}\`\n`+
       `🔑 *كلمة السر:* \`${accPass}\`\n\n`+
-      `⚠️ *احفظهم جيداً! ستحتاجهم لاستعادة حسابك لاحقاً*`,
+      `⚠️ *احفظهم جيداً! ستحتاجهم لاستعادة حسابك لاحقاً*\n\n`+
+      `💡 _يمكنك تغيير هذه البيانات في إعدادات حسابك_`,
       {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("✅ فهمت، الرئيسية","goto_main")]])}
     );
     return;
@@ -804,7 +1164,7 @@ bot.on("callback_query", async ctx=>{
 
   if(data==="goto_main"){ return showMain(ctx); }
 
-  // ─── تسجيل دخول (استعادة حساب) ───
+  // ─── تسجيل دخول ───
   if(data==="login_existing"){
     DB.state[uid]={mode:"login_email"};
     return edit("📧 أدخل الإيميل المرتبط بحسابك:",
@@ -815,13 +1175,18 @@ bot.on("callback_query", async ctx=>{
   if(data==="menu_ai"){
     const user=DB.users[uid];
     if(!user?.verified&&!isDev(uid)) return edit("❌ يجب التسجيل أولاً.",backKb());
+    if(!DB.settings.aiEnabled&&!isAdmin(uid)) return edit("❌ الذكاء الاصطناعي معطّل حالياً.",backKb());
     DB.state[uid]={mode:"ai_chat"};
     const convLen=(DB.aiConversations[uid]||[]).length;
+    const mode=DB.aiModes[uid]||"general";
+    const aiToday=aiDailyCount(uid);
+    const aiMax=DB.settings.maxAiMsgsPerDay;
     return edit(
-      `🤖 *الذكاء الاصطناعي*\n\n💬 محادثة مستمرة واحدة\n📝 الرسائل: *${Math.floor(convLen/2)}*\n\n_أرسل سؤالك الآن_`,
+      `🤖 *الذكاء الاصطناعي*\n\n🎯 الوضع: *${AI_MODE_LABELS[mode]}*\n💬 الرسائل في الجلسة: *${Math.floor(convLen/2)}*\n📊 اليوم: *${aiToday}/${isAdmin(uid)?"∞":aiMax}*\n\n_أرسل سؤالك الآن_`,
       Markup.inlineKeyboard([
-        [Markup.button.callback("🗑 مسح المحادثة","ai_clear_conv")],
-        [Markup.button.callback("🔙 الرئيسية","back")],
+        [Markup.button.callback("🔄 تغيير الوضع","ai_change_mode")],
+        [Markup.button.callback("🗑 مسح المحادثة","ai_clear_conv"),
+         Markup.button.callback("❌ خروج","back")],
       ])
     );
   }
@@ -831,10 +1196,36 @@ bot.on("callback_query", async ctx=>{
   if(data==="ai_clear_conv"){
     DB.aiConversations[uid]=[];
     saveDB();
-    return edit("✅ *تم مسح المحادثة.*\n\nيمكنك البدء من جديد.",
+    return edit("✅ *تم مسح المحادثة.*",
       Markup.inlineKeyboard([
         [Markup.button.callback("💬 محادثة جديدة","menu_ai")],
         [Markup.button.callback("🔙 الرئيسية","back")],
+      ])
+    );
+  }
+
+  // ✅ جديد: تغيير وضع AI
+  if(data==="ai_change_mode"){
+    const current=DB.aiModes[uid]||"general";
+    const rows=Object.entries(AI_MODE_LABELS).map(([k,v])=>[
+      Markup.button.callback(`${k===current?"✅ ":""}${v}`,`ai_set_mode:${k}`)
+    ]);
+    rows.push([Markup.button.callback("🔙","menu_ai")]);
+    return edit("🎯 *اختر وضع الذكاء الاصطناعي:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("ai_set_mode:")){
+    const mode=data.split(":")[1];
+    if(!AI_SYSTEMS[mode]) return;
+    DB.aiModes[uid]=mode;
+    DB.aiConversations[uid]=[];// ✅ مسح المحادثة عند تغيير الوضع
+    saveDB();
+    DB.state[uid]={mode:"ai_chat"};
+    return edit(
+      `✅ *تم تغيير الوضع إلى: ${AI_MODE_LABELS[mode]}*\n\n_تم مسح المحادثة السابقة_\n\nأرسل سؤالك الآن:`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 تغيير الوضع","ai_change_mode")],
+        [Markup.button.callback("❌ خروج","back")],
       ])
     );
   }
@@ -889,6 +1280,12 @@ bot.on("callback_query", async ctx=>{
     return;
   }
 
+  // ✅ جديد: نسخ العنوان
+  if(data.startsWith("copy_email:")){
+    const email=data.slice(11);
+    return ctx.answerCbQuery(`📋 ${email}`,{show_alert:true}).catch(()=>{});
+  }
+
   if(data.startsWith("inbox:")){
     const inboxId=data.slice(6);
     await edit("📨 *جاري فتح الصندوق...*");
@@ -914,8 +1311,9 @@ bot.on("callback_query", async ctx=>{
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi,"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,1500);
     const otps=extractOTP(fullEmail.body||"");
     const otpTxt=otps.length?`\n\n🔑 *الكود:*\n${otps.map(c=>`\`${c}\``).join("  ")}`:"";
+    const receivedAt=fullEmail.createdAt?new Date(fullEmail.createdAt).toLocaleString("ar"):"—";
     return edit(
-      `📩 *الرسالة*\n\n📬 *من:* \`${fullEmail.from||"—"}\`\n📋 *الموضوع:* ${fullEmail.subject||"بدون موضوع"}`+otpTxt+
+      `📩 *الرسالة*\n\n📬 *من:* \`${fullEmail.from||"—"}\`\n📋 *الموضوع:* ${fullEmail.subject||"بدون موضوع"}\n🕐 *وصلت:* ${receivedAt}`+otpTxt+
       `\n\n📝 *المحتوى:*\n\`\`\`\n${body||"(فارغ)"}\n\`\`\``,
       Markup.inlineKeyboard([[Markup.button.callback("🔙 الصندوق",`inbox:${inboxId}`)]])
     );
@@ -941,7 +1339,10 @@ bot.on("callback_query", async ctx=>{
     const idx=parseInt(data.split(":")[1]);const e=DB.savedEmails[uid]?.[idx];
     if(!e) return edit("❌",backKb());
     return edit(`📧 *${e.label}*\n\n\`${e.email}\`\n🕐 ${e.savedAt}`,
-      Markup.inlineKeyboard([[Markup.button.callback("🗑 حذف",`del_saved:${idx}`),Markup.button.callback("🔙","my_emails")]]));
+      Markup.inlineKeyboard([
+        [Markup.button.callback("📋 نسخ",`copy_email:${e.email}`)],
+        [Markup.button.callback("🗑 حذف",`del_saved:${idx}`),Markup.button.callback("🔙","my_emails")]
+      ]));
   }
 
   if(data.startsWith("del_saved:")){
@@ -975,18 +1376,27 @@ bot.on("callback_query", async ctx=>{
         [Markup.button.callback("🔐 توليد كلمة سر قوية","gen_pass")],
         [Markup.button.callback("💾 كلمات السر المحفوظة","my_passwords")],
         [Markup.button.callback("➕ حفظ كلمة سر يدوياً","save_pass_prompt")],
+        [Markup.button.callback("🔍 بحث في كلمات السر","search_pass")], // ✅ جديد
         [Markup.button.callback("🔙 الرئيسية","back")],
       ]));
   }
 
   if(data==="gen_pass"){
     const p=genStrongPass();
-    return edit(`🔐 *كلمة السر:*\n\n\`${p}\`\n\n📊 الطول: ${p.length}`,
+    const strength=passwordStrength(p);
+    return edit(`🔐 *كلمة السر المولّدة:*\n\n\`${p}\`\n\n📊 الطول: ${p.length} | القوة: ${strength.label}`,
       Markup.inlineKeyboard([
         [Markup.button.callback("💾 حفظها",`store_pass:${p}`)],
+        [Markup.button.callback("📋 نسخ",`copy_pass:${p}`)],
         [Markup.button.callback("🔄 أخرى","gen_pass")],
         [Markup.button.callback("🔙","menu_passwords")],
       ]));
+  }
+
+  // ✅ جديد: نسخ كلمة المرور
+  if(data.startsWith("copy_pass:")){
+    const p=data.slice(10);
+    return ctx.answerCbQuery(`🔑 ${p}`,{show_alert:true}).catch(()=>{});
   }
 
   if(data.startsWith("store_pass:")){
@@ -999,10 +1409,77 @@ bot.on("callback_query", async ctx=>{
     const saved=DB.savedPasswords[uid]||[];
     if(!saved.length) return edit("💾 *لا توجد كلمات سر.*",backKb());
     let txt=`🔑 *كلمات السر (${saved.length}):*\n\n`;
-    saved.forEach((p,i)=>{ txt+=`${i+1}. 🏷 *${p.platform}*\n   \`${p.password}\`\n\n`; });
-    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🗑 حذف الكل","del_all_pass")],[Markup.button.callback("🔙","menu_passwords")]]));
+    saved.forEach((p,i)=>{
+      const strength=passwordStrength(p.password);
+      txt+=`${i+1}. 🏷 *${p.platform}*\n   \`${p.password}\` ${strength.label}\n   📅 ${p.savedAt||"—"}\n\n`;
+    });
+    const rows=[
+      [Markup.button.callback("🗑 حذف الكل","del_all_pass")],
+      [Markup.button.callback("🔙","menu_passwords")]
+    ];
+    return edit(txt,Markup.inlineKeyboard(rows));
   }
   if(data==="del_all_pass"){ DB.savedPasswords[uid]=[]; saveDB(); return edit("🗑 تم الحذف.",backKb()); }
+
+  // ✅ جديد: بحث في كلمات السر
+  if(data==="search_pass"){
+    DB.state[uid]={mode:"search_pass"};
+    return edit("🔍 اكتب اسم المنصة للبحث:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_passwords")]]));
+  }
+
+  // ─── ملاحظات ✅ جديد ───
+  if(data==="menu_notes"){
+    const notes=DB.notes[uid]||[];
+    const rows=[];
+    if(notes.length){
+      rows.push([Markup.button.callback(`📋 ملاحظاتي (${notes.length})`,`notes_list:0`)]);
+    }
+    rows.push([Markup.button.callback("➕ إضافة ملاحظة","add_note")]);
+    rows.push([Markup.button.callback("🔙 الرئيسية","back")]);
+    return edit(`📝 *ملاحظاتي*\n\n💾 محفوظة: *${notes.length}*\n\n💡 _يمكنك أيضاً استخدام /note نص_`,Markup.inlineKeyboard(rows));
+  }
+
+  if(data==="add_note"){
+    DB.state[uid]={mode:"add_note"};
+    return edit("📝 أرسل نص الملاحظة:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_notes")]]));
+  }
+
+  if(data.startsWith("notes_list:")){
+    const page=parseInt(data.split(":")[1])||0;
+    const notes=DB.notes[uid]||[];
+    const pp=5;
+    if(!notes.length) return edit("📝 *لا توجد ملاحظات.*",backKb());
+    const rows=notes.slice(page*pp,(page+1)*pp).map((n,i)=>[
+      Markup.button.callback(`📝 ${n.text.slice(0,30)}`,`note_view:${page*pp+i}`)
+    ]);
+    const nav=[];
+    if(page>0) nav.push(Markup.button.callback("◀️",`notes_list:${page-1}`));
+    nav.push(Markup.button.callback(`${page+1}/${Math.ceil(notes.length/pp)}`,"noop"));
+    if((page+1)*pp<notes.length) nav.push(Markup.button.callback("▶️",`notes_list:${page+1}`));
+    if(nav.length) rows.push(nav);
+    rows.push([Markup.button.callback("🔙","menu_notes")]);
+    return edit(`📝 *ملاحظاتي (${notes.length}):*`,Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("note_view:")){
+    const idx=parseInt(data.split(":")[1]);
+    const note=(DB.notes[uid]||[])[idx];
+    if(!note) return edit("❌",backKb());
+    return edit(
+      `📝 *الملاحظة ${idx+1}*\n\n${note.text}\n\n🕐 ${note.time}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🗑 حذف",`note_del:${idx}`)],
+        [Markup.button.callback("🔙","notes_list:0")],
+      ])
+    );
+  }
+
+  if(data.startsWith("note_del:")){
+    const idx=parseInt(data.split(":")[1]);
+    if(DB.notes[uid]) DB.notes[uid].splice(idx,1);
+    saveDB();
+    return edit("🗑 تم حذف الملاحظة.",Markup.inlineKeyboard([[Markup.button.callback("🔙","menu_notes")]]));
+  }
 
   // ─── VirusTotal ───
   if(data==="menu_vt"){
@@ -1010,13 +1487,25 @@ bot.on("callback_query", async ctx=>{
       Markup.inlineKeyboard([
         [Markup.button.callback("🔗 فحص رابط","vt_url"),Markup.button.callback("🌐 فحص دومين","vt_domain")],
         [Markup.button.callback("🖥 فحص IP","vt_ip"),Markup.button.callback("📁 فحص ملف","vt_file_info")],
+        [Markup.button.callback("📊 نتائج مؤخراً","vt_cache_stats")], // ✅ جديد
         [Markup.button.callback("🔙 الرئيسية","back")],
       ]));
   }
   if(data==="vt_url"){ DB.state[uid]={mode:"vt_url"}; return edit("🔗 أرسل الرابط:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_vt")]])); }
-  if(data==="vt_domain"){ DB.state[uid]={mode:"vt_domain"}; return edit("🌐 أرسل الدومين:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_vt")]])); }
-  if(data==="vt_ip"){ DB.state[uid]={mode:"vt_ip"}; return edit("🖥 أرسل IP:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_vt")]])); }
-  if(data==="vt_file_info"){ return edit("📁 أرسل الملف مباشرة ↓",Markup.inlineKeyboard([[Markup.button.callback("🔙","menu_vt")]])); }
+  if(data==="vt_domain"){ DB.state[uid]={mode:"vt_domain"}; return edit("🌐 أرسل الدومين (مثال: google.com):",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_vt")]])); }
+  if(data==="vt_ip"){ DB.state[uid]={mode:"vt_ip"}; return edit("🖥 أرسل عنوان IP:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_vt")]])); }
+  if(data==="vt_file_info"){ return edit("📁 *أرسل الملف مباشرة للفحص ↓*\n\n_الحجم الأقصى: 32MB_",Markup.inlineKeyboard([[Markup.button.callback("🔙","menu_vt")]])); }
+
+  // ✅ جديد: إحصائيات الكاش
+  if(data==="vt_cache_stats"){
+    const cacheCount=Object.keys(DB.vtCache).length;
+    return edit(`📊 *سجل الفحوصات*\n\n💾 فحوصات مخزّنة: *${cacheCount}*\n⏱ صلاحية الكاش: ساعة`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🗑 مسح الكاش","vt_clear_cache")],
+        [Markup.button.callback("🔙","menu_vt")]
+      ]));
+  }
+  if(data==="vt_clear_cache"){ if(!isAdmin(uid)) return; DB.vtCache={}; saveDB(); return edit("✅ تم مسح كاش الفحص.",Markup.inlineKeyboard([[Markup.button.callback("🔙","menu_vt")]])); }
 
   // ─── UptimeRobot ───
   if(data==="menu_uptime"){
@@ -1026,9 +1515,13 @@ bot.on("callback_query", async ctx=>{
     let txt=`🌐 *مواقعك (${monitors.length}):*\n\n`;
     monitors.slice(0,10).forEach(m=>{
       const ic=m.status===2?"🟢":m.status===9?"🔴":"🟡";
-      txt+=`${ic} *${m.friendly_name||m.url}*\n   📈 ${m.all_time_uptime_ratio||"—"}%\n\n`;
+      const uptime=m.all_time_uptime_ratio?`${m.all_time_uptime_ratio}%`:"—";
+      txt+=`${ic} *${m.friendly_name||m.url}*\n   📈 ${uptime} | 🔗 ${(m.url||"").slice(0,35)}\n\n`;
     });
-    return edit(txt,backKb());
+    const online=monitors.filter(m=>m.status===2).length;
+    const offline=monitors.filter(m=>m.status===9).length;
+    txt+=`✅ يعمل: *${online}* | ❌ متوقف: *${offline}*`;
+    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔄 تحديث","menu_uptime")],[Markup.button.callback("🔙","back")]]));
   }
 
   // ─── الإحالة ───
@@ -1038,27 +1531,34 @@ bot.on("callback_query", async ctx=>{
     const refs=(DB.referrals[uid]||[]).length;
     const bonus=DB.referralPerks[uid]?.extra||0;
     return edit(
-      `🎁 *نظام الإحالة*\n\n🔗 *رابطك:*\n\`${link}\`\n\n👥 إحالاتك: *${refs}* | 🎁 مكافأتك: *+${bonus}*`,
+      `🎁 *نظام الإحالة*\n\n🔗 *رابطك:*\n\`${link}\`\n\n👥 إحالاتك: *${refs}* | 🎁 مكافأتك: *+${bonus} إيميل يومياً*\n\n💡 _شارك الرابط مع أصدقائك واحصل على إيميلات إضافية!_`,
       Markup.inlineKeyboard([[Markup.button.callback("👥 إحالاتي","my_referrals")],[Markup.button.callback("🔙","back")]]));
   }
   if(data==="my_referrals"){
     const refs=DB.referrals[uid]||[];
-    if(!refs.length) return edit("👥 *لم تُحِل أحداً بعد.*",backKb());
+    if(!refs.length) return edit("👥 *لم تُحِل أحداً بعد.*\n\n_شارك رابطك وادعُ أصدقائك!_",backKb());
     let txt=`👥 *إحالاتي (${refs.length}):*\n\n`;
-    refs.slice(0,10).forEach((id,i)=>{ txt+=`${i+1}. ${DB.users[id]?.name||id}\n`; });
+    refs.slice(0,10).forEach((id,i)=>{ txt+=`${i+1}. ${DB.users[id]?.name||id} ${DB.users[id]?.verified?"✅":""}\n`; });
     return edit(txt,backKb());
   }
 
   // ─── إحصائياتي ───
   if(data==="my_stats"){
     const u=DB.users[uid]||{};
+    const groups=getUserGroupsInfo(uid);
+    const aiToday=aiDailyCount(uid);
+    const mode=DB.aiModes[uid]||"general";
     return edit(
       `📊 *إحصائياتي*\n\n👤 *${u.name}*\n🆔 \`${uid}\`\n📅 انضممت: ${u.joinedAt}\n`+
       `📧 إيميلات اليوم: *${dailyCount(uid)}/${maxDay(uid)}*\n`+
       `📚 إجمالي: *${(DB.emailHistory[uid]||[]).length}*\n`+
       `💾 محفوظات: *${(DB.savedEmails[uid]||[]).length}*\n`+
       `🔑 كلمات سر: *${(DB.savedPasswords[uid]||[]).length}*\n`+
+      `📝 ملاحظات: *${(DB.notes[uid]||[]).length}*\n`+
       `👥 إحالات: *${(DB.referrals[uid]||[]).length}*\n`+
+      `🏘 القروبات: *${groups.length}*\n`+
+      `🤖 AI اليوم: *${aiToday}/${isAdmin(uid)?"∞":DB.settings.maxAiMsgsPerDay}*\n`+
+      `🎯 وضع AI: *${AI_MODE_LABELS[mode]}*\n`+
       `🏅 الدور: *${u.role||"user"}*`,backKb());
   }
 
@@ -1075,9 +1575,10 @@ bot.on("callback_query", async ctx=>{
   // ─── حسابي ───
   if(data==="my_account"){
     const u=DB.users[uid]||{};
+    const passSet=!!u.passwordHash;
     return edit(
       `👤 *حسابي*\n\n🆔 \`${uid}\`\n📧 ${u.accountEmail?`\`${u.accountEmail}\``:"غير محدد"}\n`+
-      `🔐 ${u.passwordHash?"✅ مُعيّنة":"❌"}\n🏅 ${u.role||"user"}`,
+      `🔐 كلمة السر: ${passSet?"✅ مُعيّنة":"❌ غير مُعيّنة"}\n🏅 ${u.role||"user"}\n📅 ${u.joinedAt}`,
       Markup.inlineKeyboard([
         [Markup.button.callback("📋 إظهار بيانات حسابي","show_account_data")],
         [Markup.button.callback("📧 تغيير الإيميل","acc_email"),Markup.button.callback("🔐 تغيير السر","acc_pass")],
@@ -1088,23 +1589,26 @@ bot.on("callback_query", async ctx=>{
   if(data==="show_account_data"){
     const u=DB.users[uid]||{};
     return edit(
-      `🔐 *بيانات حسابك*\n\n📧 *الإيميل:* \`${u.accountEmail||"غير محدد"}\`\n🔑 *كلمة السر:* \`${u.accountPassword||"غير محددة"}\`\n\n⚠️ _احتفظ بهذه البيانات_`,
+      `🔐 *بيانات حسابك*\n\n📧 *الإيميل:* \`${u.accountEmail||"غير محدد"}\`\n🔑 *كلمة السر:* \`${u.accountPassword||"غير محددة"}\`\n\n⚠️ _احتفظ بهذه البيانات. لا تشاركها مع أحد!_`,
       Markup.inlineKeyboard([[Markup.button.callback("🔙 حسابي","my_account")]]));
   }
 
   if(data==="acc_email"){ DB.state[uid]={mode:"acc_email"}; return edit("📧 أرسل بريدك الجديد:",Markup.inlineKeyboard([[Markup.button.callback("❌","my_account")]])); }
-  if(data==="acc_pass") { DB.state[uid]={mode:"acc_pass"};  return edit("🔐 أرسل كلمة السر الجديدة:",Markup.inlineKeyboard([[Markup.button.callback("❌","my_account")]])); }
+  if(data==="acc_pass") { DB.state[uid]={mode:"acc_pass"};  return edit("🔐 أرسل كلمة السر الجديدة (6 أحرف+):",Markup.inlineKeyboard([[Markup.button.callback("❌","my_account")]])); }
 
   // ─── مساعدة ───
   if(data==="help"){
     return edit(
-      `ℹ️ *دليل البوت v5*\n\n`+
-      `*🤖 AI:* ذكاء اصطناعي متقدم غير محدود\n`+
-      `*📧 الإيميلات:* إيميل حقيقي مع استقبال تلقائي للأكواد\n`+
-      `*🔑 كلمات السر:* توليد وحفظ آمن\n`+
-      `*🔍 فحص الأمان:* 70+ محرك\n`+
-      `*🏘 القروبات:* نظام إدارة متكامل\n`+
-      `*🎁 الإحالة:* إيميلات إضافية\n\n`+
+      `ℹ️ *دليل البوت v6*\n\n`+
+      `*🤖 AI متعدد الأوضاع:*\n عام | برمجة | ترجمة | إبداعي | تحليل\n\n`+
+      `*📧 الإيميلات:* إيميل حقيقي مع استقبال تلقائي للأكواد\n\n`+
+      `*🔑 كلمات السر:* توليد وحفظ وبحث آمن\n\n`+
+      `*🔍 فحص الأمان:* روابط | دومينات | IP | ملفات (70+ محرك)\n\n`+
+      `*🌐 مراقبة المواقع:* حالة مواقعك عبر UptimeRobot\n\n`+
+      `*📝 الملاحظات:* حفظ ملاحظاتك الشخصية\n\n`+
+      `*🏘 القروبات:* إدارة متكاملة للقروبات\n\n`+
+      `*🎁 الإحالة:* إيميلات إضافية بدعوة الأصدقاء\n\n`+
+      `*📟 الأوامر:*\n/id — معرّفك\n/note — ملاحظة سريعة\n/info — معلوماتك\n/ai — الذكاء الاصطناعي\n/stop — خروج من الوضع الحالي\n\n`+
       `✅ التحقق يتم مرة واحدة فقط`,backKb());
   }
 
@@ -1118,11 +1622,25 @@ bot.on("callback_query", async ctx=>{
     saveDB();
     return edit(`🛡 الحماية: ${DB.settings.screenshotProtection?"✅":"❌"}`,devSettingsKb());
   }
+  // ✅ جديد: تفعيل/تعطيل AI
+  if(data==="ds_ai_toggle"){
+    if(!isDev(uid))return;
+    DB.settings.aiEnabled=!DB.settings.aiEnabled;
+    saveDB();
+    return edit(`🤖 AI: ${DB.settings.aiEnabled?"✅ مفعّل":"❌ معطّل"}`,devSettingsKb());
+  }
+  // ✅ جديد: حذف كلمات الإساءة تلقائياً
+  if(data==="ds_autodel"){
+    if(!isDev(uid))return;
+    DB.settings.autoDeleteBadwords=!DB.settings.autoDeleteBadwords;
+    saveDB();
+    return edit(`🗑 حذف تلقائي: ${DB.settings.autoDeleteBadwords?"✅":"❌"}`,devSettingsKb());
+  }
 
-  for(const k of["ds_max","ds_cool","ds_watch","ds_ref"]){
+  for(const k of["ds_max","ds_cool","ds_watch","ds_ref","ds_ai_limit"]){
     if(data===k){
       if(!isAdmin(uid))return;
-      const lbl={ds_max:"الحد اليومي",ds_cool:"وقت الانتظار (ث)",ds_watch:"مدة المراقبة (د)",ds_ref:"مكافأة الإحالة"};
+      const lbl={ds_max:"الحد اليومي للإيميلات",ds_cool:"وقت الانتظار (ثانية)",ds_watch:"مدة المراقبة (دقيقة)",ds_ref:"مكافأة الإحالة",ds_ai_limit:"الحد اليومي لرسائل AI"};
       DB.state[uid]={mode:"dev_setting",key:k};
       return edit(`✏️ أرسل القيمة لـ *${lbl[k]}:*`,Markup.inlineKeyboard([[Markup.button.callback("❌","dev_settings")]]));
     }
@@ -1146,39 +1664,85 @@ bot.on("callback_query", async ctx=>{
     if(!isDev(uid))return;
     let txt="📜 سجل الأحداث:\n\n";
     DB.logs.forEach(l=>{ txt+=`[${l.time}] ${l.type} | ${l.uid} | ${l.text}\n`; });
-    try{ await ctx.reply(`\`\`\`\n${txt.slice(0,4000)}\n\`\`\``,{parse_mode:"Markdown"}); }catch{}
+    try{
+      await bot.telegram.sendDocument(ctx.chat.id,
+        {source:Buffer.from(txt),filename:`logs_${today()}.txt`},
+        {caption:"📜 سجل الأحداث"});
+    }catch(e){ await ctx.reply(`❌ فشل التصدير: ${e.message}`); }
     return;
   }
 
   if(data==="dev_users"){
     if(!isAdmin(uid))return;
     const users=Object.entries(DB.users);const banned=users.filter(([,u])=>u.banned).length;
-    let txt=`👥 *الأعضاء (${users.length}):*\n🚫 ${banned} محظور\n\n`;
+    const verified=users.filter(([,u])=>u.verified).length;
+    let txt=`👥 *الأعضاء (${users.length}):*\n✅ متحققون: ${verified} | 🚫 ${banned} محظور\n\n`;
     users.slice(0,8).forEach(([id,u])=>{
       const b=u.banned?"🚫":u.muted?"🔇":isAdmin(parseInt(id))?"⭐":"👤";
-      txt+=`${b} *${u.name}* [\`${id}\`]\n@${u.username||"—"}\n`;
+      txt+=`${b} *${u.name}* [\`${id}\`]\n@${u.username||"—"} | ${u.verified?"✅":"❌"}\n`;
     });
     return edit(txt,Markup.inlineKeyboard([
       [Markup.button.callback("📋 قائمة كاملة","dev_users_list"),Markup.button.callback("🔍 بحث","dev_search_user")],
+      [Markup.button.callback("📤 تصدير بيانات","dev_export_users")], // ✅ جديد
       [Markup.button.callback("🔙","dev_panel")]
     ]));
   }
 
   if(data==="dev_users_list"){ if(!isAdmin(uid))return; return edit("*اختر عضواً:*",usersKb("dev_view_user")); }
 
+  // ✅ جديد: تصدير بيانات المستخدمين
+  if(data==="dev_export_users"){
+    if(!isDev(uid))return;
+    try{
+      const headers="ID,الاسم,Username,انضم,محظور,متحقق,Role\n";
+      const rows=Object.entries(DB.users).map(([id,u])=>
+        `${id},"${u.name||""}","${u.username||""}","${u.joinedAt||""}",${u.banned?1:0},${u.verified?1:0},"${u.role||"user"}"`
+      ).join("\n");
+      await bot.telegram.sendDocument(ctx.chat.id,
+        {source:Buffer.from(headers+rows),filename:`users_${today()}.csv`},
+        {caption:`👥 بيانات ${Object.keys(DB.users).length} مستخدم`});
+    }catch(e){ await ctx.reply(`❌ فشل: ${e.message}`); }
+    return;
+  }
+
   if(data.startsWith("dev_view_user:")){
     if(!isAdmin(uid))return;
     const tid=parseInt(data.split(":")[1]);const u=DB.users[tid];
     if(!u) return edit("❌ لم يُعثر.",backKb());
+    const userGroups=getUserGroupsInfo(tid);
+    const adminGroups=userGroups.filter(g=>g.isAdmin);
+    const adminNote=DB.userNotes[tid]||"لا توجد ملاحظات";
     return edit(
       `👤 *${u.name}*\n🆔 \`${tid}\`\n@${u.username||"—"}\n📅 ${u.joinedAt}\n`+
-      `📧 ${(DB.emailHistory[tid]||[]).length} إيميل\n🚫 ${u.banned?"محظور":"—"} | 🔇 ${u.muted?"مكتوم":"—"}`,
+      `📧 ${(DB.emailHistory[tid]||[]).length} إيميل | 💬 ${u.msgCount||0} رسالة\n`+
+      `🚫 ${u.banned?"محظور":"—"} | 🔇 ${u.muted?"مكتوم":"—"} | ✅ ${u.verified?"متحقق":"غير متحقق"}\n`+
+      `🏘 القروبات: *${userGroups.length}* | ⭐ مشرف في: *${adminGroups.length}*\n`+
+      `📝 ملاحظة: _${adminNote}_`,
       Markup.inlineKeyboard([
         [Markup.button.callback(u.banned?"✅ رفع حظر":"🚫 حظر",u.banned?`dev_unban:${tid}`:`dev_ban:${tid}`),
          Markup.button.callback(u.muted?"🔊 رفع كتم":"🔇 كتم",u.muted?`dev_unmute:${tid}`:`dev_mute:${tid}`)],
         [Markup.button.callback("⭐ ترقية",`dev_promote:${tid}`),Markup.button.callback("⬇️ تخفيض",`dev_demote:${tid}`)],
+        [Markup.button.callback("📝 إضافة ملاحظة",`add_user_note:${tid}`), // ✅ جديد
+         Markup.button.callback("📨 إرسال رسالة",`msg_user:${tid}`)],      // ✅ جديد
+        [Markup.button.callback("🏘 قروباته",`user_groups:${tid}`)],
         [Markup.button.callback("🔙","dev_users_list")],
       ]));
+  }
+
+  // ✅ جديد: إضافة ملاحظة على مستخدم
+  if(data.startsWith("add_user_note:")){
+    if(!isAdmin(uid))return;
+    const tid=data.split(":")[1];
+    DB.state[uid]={mode:"add_user_note",tid};
+    return edit("📝 أرسل الملاحظة:",Markup.inlineKeyboard([[Markup.button.callback("❌",`dev_view_user:${tid}`)]]));
+  }
+
+  // ✅ جديد: إرسال رسالة خاصة لمستخدم
+  if(data.startsWith("msg_user:")){
+    if(!isAdmin(uid))return;
+    const tid=data.split(":")[1];
+    DB.state[uid]={mode:"msg_user",tid};
+    return edit("📨 أرسل الرسالة:",Markup.inlineKeyboard([[Markup.button.callback("❌",`dev_view_user:${tid}`)]]));
   }
 
   // ─── القروبات ───
@@ -1187,7 +1751,7 @@ bot.on("callback_query", async ctx=>{
     const groups=Object.entries(DB.groups);
     if(!groups.length) return edit("🏘 *لا توجد قروبات.*",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
     let txt=`🏘 *القروبات (${groups.length}):*\n\n`;
-    groups.slice(0,10).forEach(([id,g])=>{ txt+=`📌 *${g.title}*\n🆔 \`${id}\`\n👥 ${Object.keys(DB.groupMembers[id]||{}).length} عضو\n\n`; });
+    groups.slice(0,10).forEach(([id,g])=>{ txt+=`📌 *${g.title}*\n🆔 \`${id}\`\n👥 ${Object.keys(DB.groupMembers[id]||{}).length} عضو | 💬 ${g.msgCount||0} رسالة\n\n`; });
     const rows=groups.slice(0,8).map(([id,g])=>[Markup.button.callback(`🏘 ${g.title.slice(0,20)}`,`group_view:${id}`)]);
     rows.push([Markup.button.callback("🔙","dev_panel")]);
     return edit(txt,Markup.inlineKeyboard(rows));
@@ -1198,10 +1762,15 @@ bot.on("callback_query", async ctx=>{
     const gid=data.split(":")[1];const g=DB.groups[gid];
     if(!g) return edit("❌",backKb());
     const members=Object.values(DB.groupMembers[gid]||{});
-    const admins=members.filter(m=>m.status==="admin");
+    const admins=members.filter(m=>m.isAdmin||m.status==="creator"||m.status==="administrator");
+    const activeMembers=members.filter(m=>m.status!=="left"&&m.status!=="kicked");
+    let ownerName="غير معروف";
+    if(g.ownerId&&DB.groupMembers[gid]?.[g.ownerId]) ownerName=DB.groupMembers[gid][g.ownerId].name;
     const txt=
       `🏘 *${g.title}*\n🆔 \`${gid}\`\n`+
-      `👥 الأعضاء: *${members.length}*\n👑 المشرفون: *${admins.length}*\n`+
+      `👑 المالك: *${ownerName}*\n`+
+      `👥 الأعضاء: *${activeMembers.length}*\n👑 المشرفون: *${admins.length}*\n`+
+      `💬 الرسائل: *${g.msgCount||0}*\n`+
       `📅 انضم البوت: ${g.joinedAt}`;
     return edit(txt, groupControlKb(gid, uid));
   }
@@ -1210,41 +1779,158 @@ bot.on("callback_query", async ctx=>{
   if(data.startsWith("grp_members:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];const g=DB.groups[gid];
-    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status!=="left"&&m.status!=="kicked");
     let txt=`👥 *أعضاء ${g?.title||gid} (${members.length}):*\n\n`;
-    members.slice(0,20).forEach((m,i)=>{
-      txt+=`${i+1}. ${m.isBot?"🤖":"👤"} *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n   📅 ${m.joinedAt}\n   ➕ أضافه: ${m.addedByName||"—"}\n\n`;
+    members.slice(0,15).forEach((m,i)=>{
+      const role=m.isOwner?"👑":m.isAdmin?"⭐":"👤";
+      txt+=`${i+1}. ${role}${m.isBot?"🤖":""} *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n   📅 ${m.joinedAt}\n\n`;
     });
+    if(members.length>15) txt+=`_...و ${members.length-15} آخرين_`;
     return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
   }
 
-  // ─── مشرفو القروب ───
+  // ─── عرض قروبات مستخدم محدد ───
+  if(data.startsWith("user_groups:")){
+    if(!isAdmin(uid))return;
+    const tid=parseInt(data.split(":")[1]);
+    const u=DB.users[tid];
+    const groups=getUserGroupsInfo(tid);
+    if(!groups.length){
+      return edit(`🏘 *${u?.name||tid}* غير موجود في أي قروب مسجّل.`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙",`dev_view_user:${tid}`)]]));
+    }
+    let txt=`🏘 *قروبات ${u?.name||tid}:*\n\n`;
+    groups.forEach((g,i)=>{
+      const role=g.isOwner?"👑 مالك":g.isAdmin?"⭐ مشرف":"👤 عضو";
+      txt+=`${i+1}. *${g.title}*\n   🆔 \`${g.gid}\`\n   ${role}`;
+      if(g.isAdmin&&g.adminPerms){
+        const p=g.adminPerms;
+        const perms=[];
+        if(p.can_delete_messages) perms.push("حذف");
+        if(p.can_restrict_members) perms.push("تقييد");
+        if(p.can_promote_members) perms.push("ترقية");
+        if(p.can_pin_messages) perms.push("تثبيت");
+        if(p.can_manage_chat) perms.push("إدارة");
+        if(p.is_anonymous) perms.push("مجهول");
+        if(g.customTitle) txt+=` "${g.customTitle}"`;
+        if(perms.length) txt+=`\n   📋 ${perms.join("، ")}`;
+      }
+      txt+=`\n   📅 ${g.joinedAt||"—"}\n\n`;
+    });
+    const adminCount=groups.filter(g=>g.isAdmin).length;
+    txt+=`\n📊 إجمالي: *${groups.length}* قروب | ⭐ مشرف في: *${adminCount}*`;
+    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`dev_view_user:${tid}`)]]));
+  }
+
+  // ─── التحقق من رتبة شخص ───
+  if(data.startsWith("grp_check_role:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status!=="left"&&m.status!=="kicked");
+    const rows=members.slice(0,12).map(m=>[Markup.button.callback(
+      `${m.isOwner?"👑":m.isAdmin?"⭐":"👤"} ${m.name.slice(0,22)}`,
+      `grp_role_detail:${gid}:${m.id}`
+    )]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit(`🔍 *اختر عضواً للتحقق من رتبته:*`,Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_role_detail:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    await edit("⏳ *جاري التحقق من Telegram...*");
+    const freshData=await syncMemberRole(gid,tid);
+    const localData=DB.groupMembers[gid]?.[tid];
+    if(!localData&&!freshData) return edit("❌ لم يُعثر على العضو.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    const d=freshData||localData;
+    const roleDesc=describeRole(d);
+    let txt=`🔍 *نتيجة التحقق من Telegram*\n\n`;
+    txt+=`👤 *${d.name||"—"}*\n`;
+    txt+=`🆔 \`${tid}\`\n`;
+    txt+=`@${d.username||"—"}\n\n`;
+    txt+=`🏅 *الرتبة:* ${roleDesc}\n`;
+    txt+=`📅 الانضمام: ${d.joinedAt||"—"}\n`;
+    txt+=`🔄 آخر تحديث: ${d.lastSync||"—"}`;
+    if(d.isAdmin&&d.adminPerms){
+      const p=d.adminPerms;
+      txt+=`\n\n📋 *صلاحياته التفصيلية:*\n`;
+      txt+=`${p.can_manage_chat?"✅":"❌"} إدارة القروب\n`;
+      txt+=`${p.can_delete_messages?"✅":"❌"} حذف الرسائل\n`;
+      txt+=`${p.can_restrict_members?"✅":"❌"} تقييد الأعضاء\n`;
+      txt+=`${p.can_promote_members?"✅":"❌"} ترقية مشرفين\n`;
+      txt+=`${p.can_change_info?"✅":"❌"} تغيير معلومات القروب\n`;
+      txt+=`${p.can_invite_users?"✅":"❌"} دعوة أعضاء\n`;
+      txt+=`${p.can_pin_messages?"✅":"❌"} تثبيت رسائل\n`;
+      txt+=`${p.is_anonymous?"✅":"❌"} مجهول الهوية`;
+    }
+    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_sync_admins:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    await edit("⏳ *جاري تحديث بيانات المشرفين من Telegram...*");
+    const admins=await syncGroupAdmins(gid);
+    return edit(`✅ *تم التحديث!*\n\n👑 المشرفون الآن: *${admins.length}*`,
+      Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
   if(data.startsWith("grp_admins:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];const g=DB.groups[gid];
-    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="admin");
+    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.isAdmin||m.status==="creator"||m.status==="administrator");
     let txt=`👑 *مشرفو ${g?.title||gid} (${admins.length}):*\n\n`;
-    admins.forEach((m,i)=>{ txt+=`${i+1}. ⭐ *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n\n`; });
-    if(!admins.length) txt+="لا يوجد مشرفون مسجّلون.";
-    return edit(txt,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    admins.forEach((m,i)=>{
+      const roleLabel=m.isOwner||m.status==="creator"?"👑 مالك":"⭐ مشرف";
+      txt+=`${i+1}. ${roleLabel} *${m.name}*\n   🆔 \`${m.id}\` | @${m.username||"—"}\n`;
+      if(m.customTitle) txt+=`   🏷 "${m.customTitle}"\n`;
+      if(m.adminPerms){
+        const p=m.adminPerms;
+        const perms=[];
+        if(p.can_delete_messages) perms.push("حذف");
+        if(p.can_restrict_members) perms.push("تقييد");
+        if(p.can_promote_members) perms.push("ترقية");
+        if(p.can_pin_messages) perms.push("تثبيت");
+        if(p.can_manage_chat) perms.push("إدارة");
+        if(p.is_anonymous) perms.push("مجهول");
+        if(perms.length) txt+=`   📋 ${perms.join("، ")}\n`;
+      }
+      txt+=`   🔄 ${m.lastSync||"—"}\n\n`;
+    });
+    if(!admins.length) txt+="لا يوجد مشرفون مسجّلون.\n_استخدم زر تحديث المشرفين أولاً_";
+    return edit(txt,Markup.inlineKeyboard([
+      [Markup.button.callback("🔄 تحديث من Telegram",`grp_sync_admins:${gid}`)],
+      [Markup.button.callback("🔙",`group_view:${gid}`)],
+    ]));
   }
 
-  // ─── إحصائيات القروب ───
+  // ─── إحصائيات القروب ✅ مُصحَّحة ───
   if(data.startsWith("grp_stats:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];const g=DB.groups[gid];
     const members=Object.values(DB.groupMembers[gid]||{});
-    const admins=members.filter(m=>m.status==="admin");
+    // ✅ إصلاح: استخدام isAdmin بدل status==="admin"
+    const adminCount=members.filter(m=>m.isAdmin||m.isOwner||m.status==="creator"||m.status==="administrator").length;
     const bots=members.filter(m=>m.isBot);
+    const activeMembers=members.filter(m=>m.status!=="left"&&m.status!=="kicked");
+    const leftMembers=members.filter(m=>m.status==="left"||m.status==="kicked");
     const banned=Object.keys(DB.groupBanned[gid]||{}).length;
     const muted=Object.keys(DB.groupMuted[gid]||{}).length;
     const watchwords=(DB.groupWatchwords[gid]||[]).length;
     const badwords=(DB.groupBadwords[gid]||[]).length;
+    const hasWelcome=!!DB.grpWelcome[gid];
+    const hasRules=!!DB.grpRules[gid];
     return edit(
       `📊 *إحصائيات ${g?.title||gid}*\n\n`+
-      `👥 إجمالي الأعضاء: *${members.length}*\n👑 المشرفون: *${admins.length}*\n`+
-      `🤖 البوتات: *${bots.length}*\n🚫 المحظورون: *${banned}*\n🔇 المكتومون: *${muted}*\n\n`+
-      `👁 كلمات مراقبة: *${watchwords}*\n🚨 كلمات إساءة: *${badwords}*`,
+      `👥 الأعضاء النشطون: *${activeMembers.length}*\n`+
+      `👑 المشرفون: *${adminCount}*\n`+
+      `🤖 البوتات: *${bots.length}*\n`+
+      `🚶 المغادرون: *${leftMembers.length}*\n`+
+      `🚫 المحظورون: *${banned}* | 🔇 المكتومون: *${muted}*\n\n`+
+      `💬 إجمالي الرسائل: *${g?.msgCount||0}*\n`+
+      `👁 كلمات مراقبة: *${watchwords}*\n🚨 كلمات إساءة: *${badwords}*\n\n`+
+      `👋 رسالة ترحيب: ${hasWelcome?"✅":"❌"}\n`+
+      `📋 قواعد القروب: ${hasRules?"✅":"❌"}`,
       Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
   }
 
@@ -1252,7 +1938,8 @@ bot.on("callback_query", async ctx=>{
   if(data.startsWith("grp_kick:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];
-    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status!=="left"&&m.status!=="kicked"&&!m.isAdmin&&!m.isOwner);
+    if(!members.length) return edit("👥 *لا يوجد أعضاء للطرد.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
     const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_kick:${gid}:${m.id}`)]);
     rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
     return edit("🚫 *اختر العضو للطرد:*",Markup.inlineKeyboard(rows));
@@ -1264,17 +1951,22 @@ bot.on("callback_query", async ctx=>{
     try{
       await bot.telegram.banChatMember(gid,tid);
       await bot.telegram.unbanChatMember(gid,tid);
-      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="kicked";
+      if(DB.groupMembers[gid]?.[tid]){
+        DB.groupMembers[gid][tid].status="kicked";
+        DB.groupMembers[gid][tid].isAdmin=false;
+      }
       saveDB();
-      return edit(`✅ *تم طرد العضو ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+      log("kick",uid,`${tid} من ${gid}`);
+      return edit(`✅ *تم طرد العضو*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل الطرد: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
   }
 
   // ─── كتم عضو ───
   if(data.startsWith("grp_mute_member:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];
-    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member");
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status!=="left"&&m.status!=="kicked"&&!m.isAdmin&&!m.isOwner);
+    if(!members.length) return edit("🔇 *لا يوجد أعضاء للكتم.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
     const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_mute:${gid}:${m.id}`)]);
     rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
     return edit("🔇 *اختر العضو للكتم:*",Markup.inlineKeyboard(rows));
@@ -1288,8 +1980,10 @@ bot.on("callback_query", async ctx=>{
       if(!DB.groupMuted[gid]) DB.groupMuted[gid]={};
       DB.groupMuted[gid][tid]=stamp();
       saveDB();
-      return edit(`✅ *تم كتم العضو ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+      log("mute_grp",uid,`${tid} في ${gid}`);
+      return edit(`✅ *تم كتم العضو دائمياً*\n\nاستخدم رفع الكتم لإعادة صلاحياته.`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل الكتم: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
   }
 
   // ─── رفع كتم ───
@@ -1303,28 +1997,91 @@ bot.on("callback_query", async ctx=>{
       return [Markup.button.callback(`🔊 ${m?.name||mid}`,`grp_do_unmute:${gid}:${mid}`)];
     });
     rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
-    return edit("🔊 *اختر العضو لرفع الكتم:*",Markup.inlineKeyboard(rows));
+    return edit(`🔊 *المكتومون (${muted.length}):\nاختر عضواً لرفع الكتم:*`,Markup.inlineKeyboard(rows));
   }
 
   if(data.startsWith("grp_do_unmute:")){
     if(!isAdmin(uid))return;
     const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
     try{
-      await bot.telegram.restrictChatMember(gid,tid,{permissions:{can_send_messages:true,can_send_media_messages:true,can_send_polls:true,can_send_other_messages:true,can_add_web_page_previews:true}});
+      await bot.telegram.restrictChatMember(gid,tid,{permissions:{
+        can_send_messages:true,can_send_media_messages:true,can_send_polls:true,
+        can_send_other_messages:true,can_add_web_page_previews:true,can_change_info:false,
+        can_invite_users:true,can_pin_messages:false,
+      }});
       if(DB.groupMuted[gid]) delete DB.groupMuted[gid][tid];
       saveDB();
-      return edit(`✅ *رُفع الكتم عن ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+      log("unmute_grp",uid,`${tid} في ${gid}`);
+      return edit(`✅ *رُفع الكتم بنجاح*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل رفع الكتم: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
   }
 
-  // ─── ترقية مشرف ───
+  // ─── حظر عضو في القروب ✅ جديد ───
+  if(data.startsWith("grp_ban_member:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status!=="left"&&m.status!=="kicked"&&!m.isOwner);
+    if(!members.length) return edit("🚷 *لا يوجد أعضاء للحظر.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    const rows=members.slice(0,12).map(m=>[Markup.button.callback(`${m.isAdmin?"⭐":"👤"} ${m.name.slice(0,20)}`,`grp_do_ban:${gid}:${m.id}`)]);
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit("🚷 *اختر العضو للحظر الدائم:*",Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_ban:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.banChatMember(gid,tid);
+      if(!DB.groupBanned[gid]) DB.groupBanned[gid]={};
+      DB.groupBanned[gid][tid]={bannedAt:stamp(),bannedBy:uid};
+      if(DB.groupMembers[gid]?.[tid]){
+        DB.groupMembers[gid][tid].status="kicked";
+        DB.groupMembers[gid][tid].isAdmin=false;
+      }
+      saveDB();
+      log("ban_grp",uid,`${tid} في ${gid}`);
+      return edit(`🚷 *تم حظر العضو بشكل دائم*\n\nلإعادته استخدم زر رفع الحظر.`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل الحظر: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── رفع حظر عضو في القروب ✅ جديد ───
+  if(data.startsWith("grp_unban_member:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const banned=Object.keys(DB.groupBanned[gid]||{});
+    if(!banned.length) return edit("✅ *لا يوجد محظورون.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    const rows=banned.slice(0,12).map(bid=>{
+      const m=DB.groupMembers[gid]?.[bid];
+      return [Markup.button.callback(`🚷 ${m?.name||bid}`,`grp_do_unban:${gid}:${bid}`)];
+    });
+    rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
+    return edit(`✅ *المحظورون (${banned.length}):\nاختر عضواً لرفع الحظر:*`,Markup.inlineKeyboard(rows));
+  }
+
+  if(data.startsWith("grp_do_unban:")){
+    if(!isAdmin(uid))return;
+    const parts=data.split(":");const gid=parts[1];const tid=parseInt(parts[2]);
+    try{
+      await bot.telegram.unbanChatMember(gid,tid);
+      if(DB.groupBanned[gid]) delete DB.groupBanned[gid][tid];
+      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="left";
+      saveDB();
+      log("unban_grp",uid,`${tid} في ${gid}`);
+      return edit(`✅ *رُفع الحظر بنجاح*\n\nيمكن للعضو الآن الانضمام مجدداً.`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل رفع الحظر: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+  }
+
+  // ─── ترقية مشرف ✅ مُصحَّحة ───
   if(data.startsWith("grp_promote:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];
-    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member"&&!m.isBot);
+    const members=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="member"&&!m.isBot&&!m.isAdmin);
+    if(!members.length) return edit("👥 *لا يوجد أعضاء للترقية.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
     const rows=members.slice(0,12).map(m=>[Markup.button.callback(`👤 ${m.name.slice(0,20)}`,`grp_do_promote:${gid}:${m.id}`)]);
     rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
-    return edit("⭐ *اختر العضو للترقية:*",Markup.inlineKeyboard(rows));
+    return edit("⭐ *اختر العضو للترقية لمشرف:*",Markup.inlineKeyboard(rows));
   }
 
   if(data.startsWith("grp_do_promote:")){
@@ -1335,20 +2092,30 @@ bot.on("callback_query", async ctx=>{
         can_manage_chat:true,can_delete_messages:true,can_restrict_members:true,
         can_invite_users:true,can_pin_messages:true,can_change_info:false,can_promote_members:false,
       });
-      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="admin";
+      if(!DB.groupMembers[gid][tid]) DB.groupMembers[gid][tid]={id:tid,name:String(tid),username:"",status:"administrator"};
+      // ✅ إصلاح: تحديث isAdmin=true وليس status="admin"
+      DB.groupMembers[gid][tid].status="administrator";
+      DB.groupMembers[gid][tid].isAdmin=true;
+      DB.groupMembers[gid][tid].adminPerms={
+        can_manage_chat:true,can_delete_messages:true,can_restrict_members:true,
+        can_invite_users:true,can_pin_messages:true,can_change_info:false,can_promote_members:false,
+      };
       saveDB();
-      return edit(`⭐ *تمت ترقية ${tid} لمشرف*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+      log("promote_grp",uid,`${tid} في ${gid}`);
+      return edit(`⭐ *تمت ترقية العضو لمشرف بنجاح!*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل الترقية: ${e.message}\n\n_تأكد أن البوت لديه صلاحية ترقية المشرفين_`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
   }
 
-  // ─── إزالة مشرف ───
+  // ─── إزالة مشرف ✅ مُصحَّحة ───
   if(data.startsWith("grp_demote:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];
-    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.status==="admin");
+    // ✅ إصلاح: البحث بـ isAdmin بدل status==="admin"
+    const admins=Object.values(DB.groupMembers[gid]||{}).filter(m=>m.isAdmin&&!m.isOwner&&m.status!=="creator");
+    if(!admins.length) return edit("⭐ *لا يوجد مشرفون لإزالتهم.*",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
     const rows=admins.slice(0,12).map(m=>[Markup.button.callback(`⭐ ${m.name.slice(0,20)}`,`grp_do_demote:${gid}:${m.id}`)]);
     rows.push([Markup.button.callback("🔙",`group_view:${gid}`)]);
-    return edit("⬇️ *اختر المشرف لإزالته:*",Markup.inlineKeyboard(rows));
+    return edit("⬇️ *اختر المشرف لإزالة صلاحياته:*",Markup.inlineKeyboard(rows));
   }
 
   if(data.startsWith("grp_do_demote:")){
@@ -1359,10 +2126,15 @@ bot.on("callback_query", async ctx=>{
         can_manage_chat:false,can_delete_messages:false,can_restrict_members:false,
         can_promote_members:false,can_change_info:false,can_invite_users:false,can_pin_messages:false,
       });
-      if(DB.groupMembers[gid]?.[tid]) DB.groupMembers[gid][tid].status="member";
+      if(DB.groupMembers[gid]?.[tid]){
+        DB.groupMembers[gid][tid].status="member";
+        DB.groupMembers[gid][tid].isAdmin=false;  // ✅ إصلاح
+        DB.groupMembers[gid][tid].adminPerms=null;
+      }
       saveDB();
-      return edit(`⬇️ *تمت إزالة صلاحيات ${tid}*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
+      log("demote_grp",uid,`${tid} في ${gid}`);
+      return edit(`⬇️ *تمت إزالة صلاحيات المشرف بنجاح*`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل إزالة الصلاحيات: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]])); }
   }
 
   // ─── كلمات المراقبة ───
@@ -1399,7 +2171,7 @@ bot.on("callback_query", async ctx=>{
     const words=DB.groupBadwords[gid]||[];
     let txt=`🚨 *كلمات الإساءة في ${DB.groups[gid]?.title||gid}*\n\n`;
     txt+=words.length?words.map((w,i)=>`${i+1}. \`${w}\``).join("\n"):"لا توجد كلمات إساءة.";
-    txt+="\n\n_من يقول هذه الكلمات يُكتم تلقائياً_";
+    txt+="\n\n_من يقول هذه الكلمات يُكتم تلقائياً 5 دقائق ويُحذف رسالته_";
     return edit(txt,Markup.inlineKeyboard([
       [Markup.button.callback("➕ إضافة كلمة",`grp_add_badword:${gid}`),
        Markup.button.callback("🗑 مسح الكل",`grp_clear_badwords:${gid}`)],
@@ -1419,7 +2191,77 @@ bot.on("callback_query", async ctx=>{
     return edit("✅ تم مسح كلمات الإساءة.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
   }
 
-  // ─── إعدادات الحماية ───
+  // ─── رسالة ترحيب مخصصة ✅ جديد ───
+  if(data.startsWith("grp_welcome:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const current=DB.grpWelcome[gid]||"";
+    return edit(
+      `👋 *رسالة الترحيب — ${DB.groups[gid]?.title||gid}*\n\n`+
+      `${current?`*الحالية:*\n_${current}_`:"لا توجد رسالة ترحيب."}\n\n`+
+      `_المتغيرات: {name} = اسم العضو، {username} = يوزر، {group} = اسم القروب_`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✏️ تعيين رسالة ترحيب",`grp_set_welcome:${gid}`)],
+        [current?Markup.button.callback("🗑 حذف رسالة الترحيب",`grp_del_welcome:${gid}`):Markup.button.callback("🔙",`group_view:${gid}`)],
+        [Markup.button.callback("🔙",`group_view:${gid}`)],
+      ])
+    );
+  }
+
+  if(data.startsWith("grp_set_welcome:")){
+    const gid=data.split(":")[1];
+    DB.state[uid]={mode:"set_grp_welcome",gid};
+    return edit("✏️ أرسل رسالة الترحيب:\n\n_مثال: مرحباً {name} في {group}! 🎉_",
+      Markup.inlineKeyboard([[Markup.button.callback("❌",`grp_welcome:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_del_welcome:")){
+    const gid=data.split(":")[1];
+    delete DB.grpWelcome[gid]; saveDB();
+    return edit("✅ تم حذف رسالة الترحيب.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  // ─── قواعد القروب ✅ جديد ───
+  if(data.startsWith("grp_rules:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const rules=DB.grpRules[gid]||"";
+    return edit(
+      `📋 *قواعد ${DB.groups[gid]?.title||gid}*\n\n`+
+      `${rules?rules:"لا توجد قواعد محددة."}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✏️ تعيين القواعد",`grp_set_rules:${gid}`)],
+        [Markup.button.callback("📢 إرسال القواعد للقروب",`grp_send_rules:${gid}`)],
+        [rules?Markup.button.callback("🗑 حذف القواعد",`grp_del_rules:${gid}`):Markup.button.callback("🔙",`group_view:${gid}`)],
+        [Markup.button.callback("🔙",`group_view:${gid}`)],
+      ])
+    );
+  }
+
+  if(data.startsWith("grp_set_rules:")){
+    const gid=data.split(":")[1];
+    DB.state[uid]={mode:"set_grp_rules",gid};
+    return edit("📋 أرسل قواعد القروب:",Markup.inlineKeyboard([[Markup.button.callback("❌",`grp_rules:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_del_rules:")){
+    const gid=data.split(":")[1];
+    delete DB.grpRules[gid]; saveDB();
+    return edit("✅ تم حذف القواعد.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+  }
+
+  if(data.startsWith("grp_send_rules:")){
+    if(!isAdmin(uid))return;
+    const gid=data.split(":")[1];
+    const rules=DB.grpRules[gid];
+    if(!rules) return edit("❌ لم تُحدد قواعد بعد.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_rules:${gid}`)]]));
+    try{
+      await bot.telegram.sendMessage(gid,`📋 *قواعد المجموعة:*\n\n${rules}`,{parse_mode:"Markdown"});
+      return edit("✅ تم إرسال القواعد.",Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
+    }catch(e){ return edit(`❌ فشل: ${e.message}`,Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_rules:${gid}`)]])); }
+  }
+
+  // ─── إعدادات الحماية ✅ مُصحَّحة ───
   if(data.startsWith("grp_protection:")){
     if(!isAdmin(uid))return;
     const gid=data.split(":")[1];
@@ -1436,469 +2278,4 @@ bot.on("callback_query", async ctx=>{
     );
   }
 
-  if(data.startsWith("grp_toggle:")){
-    if(!isAdmin(uid))return;
-    const parts=data.split(":");const setting=parts[1];const gid=parts[2];
-    if(!DB.groupSettings[gid]) DB.groupSettings[gid]={};
-    DB.groupSettings[gid][setting]=!DB.groupSettings[gid][setting];
-    saveDB();
-    return ctx.answerCbQuery(`✅ تم التغيير`).catch(()=>{});
-  }
-
-  if(data.startsWith("grp_antibot:")){
-    if(!isAdmin(uid))return;
-    const gid=data.split(":")[1];
-    if(!DB.groupSettings[gid]) DB.groupSettings[gid]={};
-    DB.groupSettings[gid].antiBot=!DB.groupSettings[gid].antiBot;
-    saveDB();
-    return edit(`🛡 حماية البوتات: ${DB.groupSettings[gid].antiBot?"✅ مفعّلة":"❌ معطّلة"}`,
-      Markup.inlineKeyboard([[Markup.button.callback("🔙",`group_view:${gid}`)]]));
-  }
-
-  // ─── رسالة للقروب ───
-  if(data.startsWith("msg_group:")){
-    if(!isAdmin(uid))return;
-    DB.state[uid]={mode:"send_group_msg",gid:data.split(":")[1]};
-    return edit("📢 أرسل الرسالة:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_groups")]]));
-  }
-
-  if(data.startsWith("group_link:")){
-    if(!isAdmin(uid))return;
-    try{
-      const link=await bot.telegram.exportChatInviteLink(data.split(":")[1]);
-      return edit(`🔗 *رابط الدعوة:*\n${link}`,backKb());
-    }catch(e){ return edit(`❌ فشل: ${e.message}`,backKb()); }
-  }
-
-  if(data.startsWith("del_group:")){
-    if(!isDev(uid))return;
-    delete DB.groups[data.split(":")[1]];
-    saveDB();
-    return edit("🗑 تم.",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_groups")]]));
-  }
-
-  // ─── المسؤولون ───
-  if(data==="dev_admins"){
-    if(!isDev(uid))return;
-    const admins=[...DB.admins].filter(a=>a!==DEV_ID);
-    let txt=`🛡 *المسؤولون (${admins.length}):*\n\n`;
-    admins.forEach(aid=>{ const u=DB.users[aid]; txt+=`⭐ *${u?.name||aid}* [\`${aid}\`]\n`; });
-    if(!admins.length) txt+="لا يوجد مسؤولون.";
-    const rows=admins.map(aid=>[[Markup.button.callback(`⭐ ${DB.users[aid]?.name||aid}`,`admin_manage:${aid}`)]]).flat();
-    rows.push([Markup.button.callback("➕ إضافة","dev_promote")]);
-    rows.push([Markup.button.callback("🔙","dev_panel")]);
-    return edit(txt,Markup.inlineKeyboard(rows));
-  }
-
-  // ─── تخصيص البوت ───
-  if(data==="dev_customize"){
-    if(!isDev(uid))return;
-    return edit(`🤖 *تخصيص البوت*\n\n📛 الاسم: *${DB.settings.botName}*\n💬 الترحيب: _${DB.settings.welcomeMsg}_`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✏️ تغيير الاسم","change_bot_name")],
-        [Markup.button.callback("💬 تغيير رسالة الترحيب","change_welcome")],
-        [Markup.button.callback("📝 تغيير الوصف","change_bot_desc")],
-        [Markup.button.callback("🔙","dev_panel")],
-      ]));
-  }
-
-  if(data==="change_bot_name"){ if(!isDev(uid))return; DB.state[uid]={mode:"change_bot_name"}; return edit("✏️ أرسل الاسم الجديد:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
-  if(data==="change_welcome")  { if(!isDev(uid))return; DB.state[uid]={mode:"change_welcome"};  return edit("💬 أرسل رسالة الترحيب الجديدة:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
-  if(data==="change_bot_desc") { if(!isDev(uid))return; DB.state[uid]={mode:"change_bot_desc"}; return edit("📝 أرسل الوصف الجديد:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_customize")]])); }
-
-  // ─── إعلانات ───
-  if(data==="dev_announce"){
-    if(!isAdmin(uid))return;
-    DB.state[uid]={mode:"dev_announce"};
-    return edit("📣 أرسل نص الإعلان:",Markup.inlineKeyboard([
-      [Markup.button.callback("🗑 مسح الحالي","dev_clear_ann")],
-      [Markup.button.callback("❌","dev_panel")]
-    ]));
-  }
-  if(data==="dev_clear_ann"){ if(!isAdmin(uid))return; DB.announcements=[]; saveDB(); return edit("✅ مُسح.",devKb()); }
-
-  // ─── رسالة جماعية ───
-  if(data==="dev_broadcast"){
-    if(!hasPerm(uid,"broadcast")) return edit("❌ لا صلاحية.",backKb());
-    DB.state[uid]={mode:"broadcast"};
-    return edit("📢 أرسل الرسالة الجماعية:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_panel")]]));
-  }
-
-  // ─── بحث عضو ───
-  if(data==="dev_search_user"){
-    if(!isAdmin(uid))return;
-    DB.state[uid]={mode:"dev_search"};
-    return edit("🔍 أرسل ID أو اسم:",Markup.inlineKeyboard([[Markup.button.callback("❌","dev_panel")]]));
-  }
-
-  // ─── نسخ احتياطي ───
-  if(data==="dev_backup"){
-    if(!isDev(uid))return;
-    try{
-      const backup={...DB,admins:[...DB.admins]};
-      const txt=JSON.stringify(backup);
-      const total=Object.keys(DB.users).length;
-      const groups=Object.keys(DB.groups).length;
-      return edit(
-        `💾 *النسخ الاحتياطي*\n\n👥 الأعضاء: *${total}*\n🏘 القروبات: *${groups}*\n📜 السجلات: *${DB.logs.length}*\n💾 الحجم: *${(txt.length/1024).toFixed(1)}KB*\n\n✅ قاعدة البيانات تُحفظ تلقائياً كل 30 ثانية`,
-        Markup.inlineKeyboard([[Markup.button.callback("📤 تصدير JSON","dev_export_db")],[Markup.button.callback("🔙","dev_panel")]]));
-    }catch(e){ return edit(`❌ خطأ: ${e.message}`,backKb()); }
-  }
-
-  if(data==="dev_export_db"){
-    if(!isDev(uid))return;
-    try{
-      const backup={...DB,admins:[...DB.admins]};
-      const txt=JSON.stringify(backup,null,2);
-      await bot.telegram.sendDocument(ctx.chat.id,
-        {source:Buffer.from(txt),filename:`backup_${today()}.json`},
-        {caption:"💾 نسخة احتياطية من قاعدة البيانات"});
-    }catch(e){ await ctx.reply(`❌ فشل التصدير: ${e.message}`); }
-    return;
-  }
-
-  // ─── إعدادات AI ───
-  if(data==="dev_ai_settings"){
-    if(!isDev(uid))return;
-    const totalConvs=Object.values(DB.aiConversations).reduce((a,c)=>a+c.length,0);
-    return edit(
-      `🤖 *إعدادات الذكاء الاصطناعي*\n\n`+
-      `📊 إجمالي الرسائل: *${totalConvs}*\n`+
-      `👥 المحادثات النشطة: *${Object.keys(DB.aiConversations).length}*\n`+
-      `🔑 النموذج: *DeepSeek Chat*\n`+
-      `♾️ الرصيد: غير محدود`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🗑 مسح كل المحادثات","dev_clear_all_ai")],
-        [Markup.button.callback("🔙","dev_panel")],
-      ]));
-  }
-
-  if(data==="dev_clear_all_ai"){
-    if(!isDev(uid))return;
-    DB.aiConversations={};saveDB();
-    return edit("✅ تم مسح كل محادثات AI.",Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
-  }
-
-  // ─── إجراءات الأعضاء ───
-  const acts=["dev_ban","dev_unban","dev_mute","dev_unmute","dev_promote","dev_demote"];
-  for(const act of acts){
-    if(data===act){ if(!isAdmin(uid))return; return edit("*اختر عضواً:*",usersKb(act)); }
-    if(data.startsWith(`${act}:`)){
-      if(!isAdmin(uid))return;
-      const tid=parseInt(data.split(":")[1]);
-      if(!DB.users[tid]) DB.users[tid]={name:String(tid),username:"",joinedAt:stamp(),banned:false,muted:false,role:"user",lastSeen:"—",msgCount:0,verified:false};
-      let msg="";
-      if(act==="dev_ban")    { if(!hasPerm(uid,"ban"))return; DB.users[tid].banned=true;  msg=`🚫 تم حظر \`${tid}\``; log("ban",uid,String(tid)); }
-      if(act==="dev_unban")  { if(!hasPerm(uid,"ban"))return; DB.users[tid].banned=false; msg=`✅ رُفع حظر \`${tid}\``; log("unban",uid,String(tid)); }
-      if(act==="dev_mute")   { if(!hasPerm(uid,"mute"))return; DB.users[tid].muted=true;   msg=`🔇 تم كتم \`${tid}\``; log("mute",uid,String(tid)); }
-      if(act==="dev_unmute") { if(!hasPerm(uid,"mute"))return; DB.users[tid].muted=false;  msg=`🔊 رُفع كتم \`${tid}\``; log("unmute",uid,String(tid)); }
-      if(act==="dev_promote"){ if(!isDev(uid))return; DB.admins.add(tid); DB.users[tid].role="admin"; msg=`⭐ ترقية \`${tid}\``; log("promote",uid,String(tid)); try{await bot.telegram.sendMessage(tid,"⭐ تمت ترقيتك لمسؤول!");}catch{} }
-      if(act==="dev_demote") { if(!isDev(uid))return; DB.admins.delete(tid); delete DB.adminPerms[tid]; DB.users[tid].role="user"; msg=`⬇️ تخفيض \`${tid}\``; log("demote",uid,String(tid)); }
-      saveDB();
-      try{ await bot.telegram.sendMessage(tid,`📢 إجراء: ${msg.replace(/`/g,"")}`); }catch{}
-      return edit(msg,Markup.inlineKeyboard([[Markup.button.callback("🔙","dev_panel")]]));
-    }
-  }
-
-  if(data.startsWith("upage:")){ const[,act,pg]=data.split(":"); return edit("*اختر:*",usersKb(act,parseInt(pg))); }
-});
-
-// ===================== النصوص =====================
-bot.on("text", async ctx=>{
-  const uid=ctx.from.id;
-  const text=ctx.message.text.trim();
-  const st=DB.state[uid];
-
-  // ── AI Chat (أولوية عليا) ──
-  if(st?.mode==="ai_chat"){
-    if(text.startsWith("/")) return; // تجاهل الأوامر
-    try{ await ctx.sendChatAction("typing"); }catch{}
-    const reply=await aiChat(uid,text);
-    saveDB();
-    // إرسال الرد مع زر إنهاء
-    return ctx.reply(reply,{
-      parse_mode:"Markdown",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("🗑 مسح المحادثة","ai_clear_conv"),
-         Markup.button.callback("❌ خروج","menu_ai_stop")],
-      ])
-    }).catch(()=>ctx.reply(reply,Markup.inlineKeyboard([[Markup.button.callback("❌ خروج","menu_ai_stop")]])));
-  }
-
-  if(!st) return;
-
-  // ── CAPTCHA ──
-  if(st.mode==="captcha"){
-    if(parseInt(text)===DB.sessions[uid]?.captchaAns){
-      delete DB.state[uid];
-      log("verified",uid,DB.users[uid]?.name);
-      return showRegisterOrLogin(ctx);
-    } else {
-      const n1=Math.floor(Math.random()*9)+1,n2=Math.floor(Math.random()*9)+1;
-      DB.sessions[uid].captchaAns=n1+n2;
-      return ctx.reply(`❌ خطأ. حاول:\n\n🔢 *${n1} + ${n2} = ?*`,{parse_mode:"Markdown"});
-    }
-  }
-
-  // ── تسجيل الدخول ──
-  if(st.mode==="login_email"){
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply("❌ بريد غير صحيح، حاول مجدداً.");
-    // البحث عن الحساب
-    const found=Object.entries(DB.users).find(([,u])=>u.accountEmail===text);
-    if(!found) return ctx.reply("❌ لم يُعثر على حساب بهذا الإيميل.\n\nاختر 'إنشاء حساب جديد' إذا لم يكن لديك حساب.",
-      Markup.inlineKeyboard([[Markup.button.callback("✨ إنشاء حساب","register_new")]]));
-    DB.state[uid]={mode:"login_pass",targetUid:found[0]};
-    return ctx.reply("🔑 أدخل كلمة السر:",Markup.inlineKeyboard([[Markup.button.callback("❌ إلغاء","back")]]));
-  }
-
-  if(st.mode==="login_pass"){
-    const targetUid=st.targetUid;
-    const targetUser=DB.users[targetUid];
-    if(!targetUser) return ctx.reply("❌ خطأ، حاول مجدداً.");
-    if(hashPass(text)!==targetUser.passwordHash) return ctx.reply("❌ كلمة السر خاطئة.");
-    delete DB.state[uid];
-    // استعادة بيانات الحساب
-    if(targetUid!=String(uid)){
-      // نقل بيانات الحساب القديم للمستخدم الحالي
-      DB.users[uid].accountEmail=targetUser.accountEmail;
-      DB.users[uid].accountPassword=targetUser.accountPassword;
-      DB.users[uid].passwordHash=targetUser.passwordHash;
-      DB.users[uid].savedEmails_bak=DB.savedEmails[targetUid]||[];
-    }
-    DB.users[uid].verified=true;
-    saveDB();
-    log("login",uid,targetUser.accountEmail);
-    await ctx.reply(
-      `✅ *تم تسجيل الدخول بنجاح!*\n\n👤 مرحباً مجدداً!\n📧 \`${targetUser.accountEmail}\`\n\nتم استعادة كل بياناتك.`,
-      {parse_mode:"Markdown"});
-    return showMain(ctx);
-  }
-
-  // ── فحص VirusTotal ──
-  if(st.mode==="vt_url"){
-    delete DB.state[uid];
-    await ctx.reply("⏳ *جاري الفحص...*",{parse_mode:"Markdown"});
-    const r=await vtScanUrl(text);
-    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
-    const {stats,reputation,malEngines}=r;
-    const mal=stats.malicious||0,sus=stats.suspicious||0,clean=stats.harmless||0,undet=stats.undetected||0;
-    const vd=mal>0?"🔴 *خطر!*":sus>0?"🟡 *مشبوه*":"🟢 *آمن*";
-    const engTxt=malEngines?.length?`\n\n🚨 *كشف بواسطة:*\n${malEngines.join(", ")}`:"";
-    return ctx.reply(
-      `🔍 *نتيجة فحص الرابط*\n\n${vd}\n\n🔗 \`${text.slice(0,60)}\`\n\n`+
-      `🔴 ضار: *${mal}* | 🟡 مشبوه: *${sus}*\n🟢 آمن: *${clean}* | ⬜ غير محدد: *${undet}*\n⭐ السمعة: *${reputation}*`+engTxt,
-      {parse_mode:"Markdown",...mainKb()});
-  }
-
-  if(st.mode==="vt_domain"){
-    delete DB.state[uid];
-    await ctx.reply("⏳ *جاري فحص الدومين...*",{parse_mode:"Markdown"});
-    const domain=text.replace(/https?:\/\//,"").split("/")[0];
-    const r=await vtScanDomain(domain);
-    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
-    const {stats,reputation,registrar,created,malEngines}=r;
-    const mal=stats.malicious||0;
-    return ctx.reply(
-      `🌐 *فحص الدومين*\n\n${mal>0?"🔴 *خطر*":"🟢 *آمن*"}\n\n\`${domain}\`\n\n`+
-      `🔴 ضار: *${mal}* | 🟢 آمن: *${stats.harmless||0}*\n⭐ السمعة: *${reputation}*\n🏢 ${registrar}\n📅 ${created}`+
-      (malEngines?.length?`\n🚨 ${malEngines.join(", ")}`:""),
-      {parse_mode:"Markdown",...mainKb()});
-  }
-
-  if(st.mode==="vt_ip"){
-    delete DB.state[uid];
-    await ctx.reply("⏳ *جاري فحص IP...*",{parse_mode:"Markdown"});
-    const r=await vtScanIp(text);
-    if(!r) return ctx.reply("❌ تعذر الفحص.",mainKb());
-    const {stats,reputation,country,asOwner,malEngines}=r;
-    const mal=stats.malicious||0;
-    return ctx.reply(
-      `🖥 *فحص IP*\n\n${mal>0?"🔴 *خطر*":"🟢 *آمن*"}\n\n\`${text}\`\n🌍 ${country}\n🏢 ${asOwner}\n\n`+
-      `🔴 *${mal}* | 🟢 *${stats.harmless||0}*\n⭐ *${reputation}*`+
-      (malEngines?.length?`\n🚨 ${malEngines.join(", ")}`:""),
-      {parse_mode:"Markdown",...mainKb()});
-  }
-
-  // ── كلمات مراقبة القروب ──
-  if(st.mode==="add_watchword"){
-    const gid=st.gid; delete DB.state[uid];
-    if(!DB.groupWatchwords[gid]) DB.groupWatchwords[gid]=[];
-    DB.groupWatchwords[gid].push(text.toLowerCase());
-    saveDB();
-    return ctx.reply(`✅ *تمت إضافة كلمة المراقبة:* \`${text}\``,
-      {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_watchwords:${gid}`)]])});
-  }
-
-  // ── كلمات إساءة القروب ──
-  if(st.mode==="add_badword"){
-    const gid=st.gid; delete DB.state[uid];
-    if(!DB.groupBadwords[gid]) DB.groupBadwords[gid]=[];
-    DB.groupBadwords[gid].push(text.toLowerCase());
-    saveDB();
-    return ctx.reply(`✅ *تمت إضافة كلمة الإساءة:* \`${text}\``,
-      {parse_mode:"Markdown",...Markup.inlineKeyboard([[Markup.button.callback("🔙",`grp_badwords:${gid}`)]])});
-  }
-
-  // ── حفظ الإيميل ──
-  if(st.mode==="save_email_label"){
-    const {email,inboxId}=st; delete DB.state[uid];
-    if(!DB.savedEmails[uid]) DB.savedEmails[uid]=[];
-    DB.savedEmails[uid].push({email,inboxId,label:text,savedAt:stamp()});
-    saveDB(); log("email_saved",uid,`${email}|${text}`);
-    return ctx.reply(`✅ *تم الحفظ!*\n\n📧 \`${email}\`\n🏷 *${text}*`,{parse_mode:"Markdown",...emailActiveKb(email,inboxId)});
-  }
-
-  // ── كلمات السر ──
-  if(st.mode==="store_pass_platform"){
-    const pass=st.pass; delete DB.state[uid];
-    if(!DB.savedPasswords[uid]) DB.savedPasswords[uid]=[];
-    DB.savedPasswords[uid].push({platform:text,password:pass,savedAt:stamp()});
-    saveDB(); log("pass_saved",uid,text);
-    return ctx.reply(`✅ *تم الحفظ!*\n\n🏷 *${text}*\n🔐 \`${pass}\``,{parse_mode:"Markdown",...mainKb()});
-  }
-  if(st.mode==="save_pass_custom"){
-    DB.state[uid]={mode:"store_pass_platform",pass:text};
-    return ctx.reply("✏️ اسم المنصة:",Markup.inlineKeyboard([[Markup.button.callback("❌","menu_passwords")]]));
-  }
-
-  // ── إعداد الحساب ──
-  if(st.mode==="acc_email"){
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply("❌ بريد غير صحيح.");
-    delete DB.state[uid]; DB.users[uid].accountEmail=text; saveDB();
-    return ctx.reply(`✅ *تم ربط البريد:* \`${text}\``,{parse_mode:"Markdown",...mainKb()});
-  }
-  if(st.mode==="acc_pass"){
-    if(text.length<6) return ctx.reply("❌ يجب 6 أحرف+.");
-    delete DB.state[uid];
-    DB.users[uid].passwordHash=hashPass(text);
-    DB.users[uid].accountPassword=text;
-    saveDB();
-    return ctx.reply("✅ *تم تعيين كلمة السر!*",{parse_mode:"Markdown",...mainKb()});
-  }
-
-  // ── إعدادات الأرقام ──
-  if(st.mode==="dev_setting"){
-    if(!isAdmin(uid))return;
-    const val=parseInt(text);
-    if(isNaN(val)||val<1) return ctx.reply("❌ قيمة غير صحيحة.");
-    if(st.key==="ds_max")   DB.settings.maxEmailsPerDay=val;
-    if(st.key==="ds_cool")  DB.settings.cooldown=val;
-    if(st.key==="ds_watch") DB.settings.emailWatchMin=val;
-    if(st.key==="ds_ref")   DB.settings.refBonus=val;
-    delete DB.state[uid]; saveDB();
-    return ctx.reply("✅ تم التحديث.",devSettingsKb());
-  }
-
-  if(st.mode==="dev_announce"){
-    if(!isAdmin(uid))return;
-    delete DB.state[uid];
-    DB.announcements.unshift(text);
-    if(DB.announcements.length>3) DB.announcements.pop();
-    saveDB();
-    return ctx.reply("✅ تم النشر.",devKb());
-  }
-
-  if(st.mode==="dev_search"){
-    if(!isAdmin(uid))return;
-    delete DB.state[uid];
-    const q=text.toLowerCase();
-    const found=Object.entries(DB.users).filter(([id,u])=>
-      id===text||u.name?.toLowerCase().includes(q)||u.username?.toLowerCase().includes(q));
-    if(!found.length) return ctx.reply("❌ لم يُعثر.",devKb());
-    let txt=`🔍 *نتائج (${found.length}):*\n\n`;
-    found.slice(0,5).forEach(([id,u])=>{ txt+=`👤 *${u.name}* [\`${id}\`]\n@${u.username||"—"}\n\n`; });
-    const rows=found.slice(0,5).map(([id])=>[[Markup.button.callback(`👁 ${id}`,`dev_view_user:${id}`)]]).flat();
-    rows.push([Markup.button.callback("🔙","dev_panel")]);
-    return ctx.reply(txt,{parse_mode:"Markdown",...Markup.inlineKeyboard(rows)});
-  }
-
-  if(st.mode==="broadcast"){
-    if(!hasPerm(uid,"broadcast"))return;
-    delete DB.state[uid];
-    const ids=Object.keys(DB.users);
-    await ctx.reply(`📢 جاري الإرسال لـ ${ids.length} عضو...`);
-    let sent=0,fail=0;
-    for(const id of ids){
-      try{ await bot.telegram.sendMessage(parseInt(id),`📢 *رسالة من الإدارة:*\n\n${text}`,{parse_mode:"Markdown"}); sent++; await sleep(50); }
-      catch{ fail++; }
-    }
-    log("broadcast",uid,`${sent} نجح | ${fail} فشل`);
-    saveDB();
-    return ctx.reply(`✅ *${sent}* أُرسلت | *${fail}* فشل`,{parse_mode:"Markdown",...devKb()});
-  }
-
-  if(st.mode==="send_group_msg"){
-    if(!isAdmin(uid))return;
-    const gid=st.gid; delete DB.state[uid];
-    try{
-      await bot.telegram.sendMessage(gid,`📢 *من الإدارة:*\n\n${text}`,{parse_mode:"Markdown"});
-      return ctx.reply("✅ تم الإرسال.",devKb());
-    }catch(e){ return ctx.reply(`❌ فشل: ${e.message}`,devKb()); }
-  }
-
-  if(st.mode==="change_bot_name"){
-    if(!isDev(uid))return; delete DB.state[uid];
-    DB.settings.botName=text;
-    try{ await bot.telegram.setMyName(text); }catch{}
-    saveDB();
-    return ctx.reply(`✅ تم تغيير الاسم: *${text}*`,{parse_mode:"Markdown",...devKb()});
-  }
-
-  if(st.mode==="change_welcome"){
-    if(!isDev(uid))return; delete DB.state[uid];
-    DB.settings.welcomeMsg=text; saveDB();
-    return ctx.reply("✅ تم تغيير رسالة الترحيب.",devKb());
-  }
-
-  if(st.mode==="change_bot_desc"){
-    if(!isDev(uid))return; delete DB.state[uid];
-    try{ await bot.telegram.setMyDescription(text); return ctx.reply("✅ تم تغيير الوصف.",devKb()); }
-    catch(e){ return ctx.reply(`❌ فشل: ${e.message}`,devKb()); }
-  }
-});
-
-// ===================== فحص الملفات =====================
-bot.on(["document","photo","video","audio"], async ctx=>{
-  const uid=ctx.from.id;
-  if(!DB.users[uid]?.verified&&!isDev(uid)) return;
-  const file=ctx.message.document||(ctx.message.photo&&ctx.message.photo[ctx.message.photo.length-1])||ctx.message.video||ctx.message.audio;
-  if(!file) return;
-  const fileSize=file.file_size||0;
-  if(fileSize>32*1024*1024) return ctx.reply("❌ الملف أكبر من 32MB.");
-  const fname=file.file_name||`file_${Date.now()}`;
-  const ext=fname.split(".").pop()?.toLowerCase()||"";
-  let fileType="📄 مستند";
-  if(["jpg","jpeg","png","gif","webp"].includes(ext)) fileType="🖼 صورة";
-  else if(["apk","exe","msi"].includes(ext)) fileType="📱 تطبيق";
-  else if(["mp4","avi","mkv"].includes(ext)) fileType="🎬 فيديو";
-  else if(["mp3","wav","ogg"].includes(ext)) fileType="🎵 صوت";
-  else if(["pdf","doc","docx"].includes(ext)) fileType="📋 وثيقة";
-  else if(["zip","rar","7z"].includes(ext)) fileType="📦 مضغوط";
-  else if(["js","py","php","sh"].includes(ext)) fileType="💻 سكريبت";
-  await ctx.reply(`🔍 *جاري فحص الملف...*\n\n${fileType}: \`${fname}\`\n📦 ${(fileSize/1024).toFixed(1)}KB\n\n⏳ الفحص بـ 70+ محرك...`,{parse_mode:"Markdown"});
-  try{
-    const link=await bot.telegram.getFileLink(file.file_id);
-    const res=await axios.get(link.href,{responseType:"arraybuffer",timeout:60000});
-    const id=await vtUploadFile(Buffer.from(res.data),fname);
-    if(!id) return ctx.reply("❌ فشل رفع الملف.",mainKb());
-    log("file_scan",uid,fname);
-    await ctx.reply("⏳ *تم الرفع. جاري التحليل...*",{parse_mode:"Markdown"});
-    const report=await vtGetAnalysis(id);
-    if(!report) return ctx.reply("⌛ التحليل لم يكتمل. حاول لاحقاً.",mainKb());
-    const stats=report.stats||{};
-    const mal=stats.malicious||0,sus=stats.suspicious||0,clean=stats.harmless||0,undet=stats.undetected||0;
-    const vd=mal>0?"🔴 *خطر!*":sus>0?"🟡 *مشبوه*":"🟢 *آمن*";
-    const malEngines=Object.entries(report.results||{}).filter(([,v])=>v.category==="malicious").map(([k,v])=>`${k}: ${v.result||""}`).slice(0,8);
-    return ctx.reply(
-      `🔍 *نتيجة الفحص*\n\n${vd}\n\n${fileType}: \`${fname}\`\n\n`+
-      `🔴 ضار: *${mal}*\n🟡 مشبوه: *${sus}*\n🟢 آمن: *${clean}*\n⬜ غير محدد: *${undet}*`+
-      (malEngines.length?`\n\n🚨 *كشف بواسطة:*\n${malEngines.join("\n")}`:""),
-      {parse_mode:"Markdown",...mainKb()});
-  }catch(e){ return ctx.reply("❌ خطأ أثناء الفحص.",mainKb()); }
-});
-
-// ===================== تشغيل =====================
-console.log("🚀 البوت v5.0 — شامل المميزات");
-bot.launch();
-process.once("SIGINT",  ()=>{ saveDB(); bot.stop("SIGINT"); });
-process.once("SIGTERM", ()=>{ saveDB(); bot.stop("SIGTERM"); });
+  
