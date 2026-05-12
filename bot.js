@@ -2362,6 +2362,320 @@ bot.on("callback_query", async ctx=>{
 });
 
 // ===================== استعادة النسخة الاحتياطية (رفع ملف) =====================
+   // أي كود هنا ...
+
+// ===================== معالج النصوص لكل الحالات =====================
+bot.on("text", async (ctx, next) => {
+ // ===================== معالج النصوص لكل الحالات =====================
+bot.on("text", async (ctx, next) => {
+  const uid = ctx.from?.id;
+  if (!uid) return next();
+  const text = ctx.message.text.trim();
+  const state = DB.state[uid];
+  if (!state) return next();
+
+  const { mode } = state;
+
+  // --- Captcha ---
+  if (mode === "captcha") {
+    const ans = parseInt(text);
+    const correct = DB.sessions[uid]?.captchaAns;
+    if (ans === correct) {
+      delete DB.state[uid];
+      delete DB.sessions[uid].captchaAns;
+      return showRegisterOrLogin(ctx);
+    } else {
+      return ctx.reply("❌ إجابة خاطئة، حاول مرة أخرى.");
+    }
+  }
+
+  // --- تسجيل الدخول ---
+  if (mode === "login_email") {
+    const matchedUser = Object.entries(DB.users).find(([id, u]) => u.accountEmail === text);
+    if (!matchedUser) return ctx.reply("❌ لم نجد حساباً بهذا الإيميل.");
+    const [foundId] = matchedUser;
+    DB.state[uid] = { mode: "login_pass", foundId };
+    return ctx.reply("🔐 أدخل كلمة السر:");
+  }
+
+  if (mode === "login_pass") {
+    const u = DB.users[state.foundId];
+    if (hashPass(text) === u.passwordHash) {
+      // استعادة الحساب
+      DB.users[uid] = { ...DB.users[uid], ...u, id: uid, name: ctx.from.first_name, username: ctx.from.username, verified: true };
+      delete DB.state[uid];
+      saveDB();
+      return ctx.reply("✅ تم استعادة حسابك بنجاح!", mainKb());
+    } else {
+      return ctx.reply("❌ كلمة سر خاطئة.");
+    }
+  }
+
+  // --- AI Chat ---
+  if (mode === "ai_chat") {
+    if (!DB.settings.aiEnabled && !isAdmin(uid)) {
+      delete DB.state[uid];
+      return ctx.reply("❌ الذكاء الاصطناعي معطّل.", mainKb());
+    }
+    if (aiDailyCount(uid) >= DB.settings.maxAiMsgsPerDay && !isAdmin(uid)) {
+      delete DB.state[uid];
+      return ctx.reply("🚫 تم استهلاك الحد اليومي للـ AI.", mainKb());
+    }
+    await ctx.replyWithChatAction("typing");
+    const reply = await aiChat(uid, text);
+    ctx.reply(reply, { parse_mode: "Markdown" }).catch(() => {});
+    return;
+  }
+
+  // --- حفظ تسمية إيميل ---
+  if (mode === "save_email_label") {
+    const { email, inboxId } = state;
+    if (!DB.savedEmails[uid]) DB.savedEmails[uid] = [];
+    DB.savedEmails[uid].push({ email, label: text, savedAt: stamp() });
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply(`✅ تم حفظ الإيميل تحت "${text}"`, emailActiveKb(email, inboxId));
+  }
+
+  // --- حفظ كلمة سر يدوية ---
+  if (mode === "save_pass_custom") {
+    if (text.length < 3) return ctx.reply("❌ كلمة السر قصيرة جداً.");
+    DB.state[uid] = { mode: "store_pass_platform", pass: text };
+    return ctx.reply("✏️ اكتب اسم المنصة:", Markup.inlineKeyboard([[Markup.button.callback("❌", "menu_passwords")]]));
+  }
+
+  if (mode === "store_pass_platform") {
+    if (!DB.savedPasswords[uid]) DB.savedPasswords[uid] = [];
+    DB.savedPasswords[uid].push({ platform: text, password: state.pass, savedAt: stamp() });
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply(`✅ تم حفظ كلمة السر لـ "${text}"`, mainKb());
+  }
+
+  // --- بحث في كلمات السر ---
+  if (mode === "search_pass") {
+    const saved = DB.savedPasswords[uid] || [];
+    const results = saved.filter(p => p.platform.toLowerCase().includes(text.toLowerCase()));
+    if (!results.length) {
+      delete DB.state[uid];
+      return ctx.reply("🔍 لا توجد نتائج.", mainKb());
+    }
+    delete DB.state[uid];
+    let txt = `🔍 *نتائج البحث:*\n\n`;
+    results.forEach((p, i) => {
+      const strength = passwordStrength(p.password);
+      txt += `${i + 1}. 🏷 *${p.platform}*\n   \`${p.password}\` ${strength.label}\n   📅 ${p.savedAt || "—"}\n\n`;
+    });
+    return ctx.reply(txt, { parse_mode: "Markdown" });
+  }
+
+  // --- إضافة ملاحظة ---
+  if (mode === "add_note") {
+    if (!DB.notes[uid]) DB.notes[uid] = [];
+    DB.notes[uid].unshift({ text, time: stamp(), id: Date.now() });
+    if (DB.notes[uid].length > 50) DB.notes[uid].pop();
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم حفظ الملاحظة.", mainKb());
+  }
+
+  // --- VirusTotal ---
+  if (mode === "vt_url") {
+    delete DB.state[uid];
+    await ctx.replyWithChatAction("typing");
+    const result = await vtScanUrl(text);
+    let reply;
+    if (!result) reply = "❌ تعذر الفحص.";
+    else {
+      const mal = result.stats.malicious || 0;
+      const total = Object.values(result.stats).reduce((a, b) => a + b, 0);
+      reply = `🔍 *نتيجة فحص الرابط:*\n\n🔗 \`${text}\`\n🛡 المحركات الخبيثة: *${mal}/${total}*\n${result.malEngines.length ? "⚠️ " + result.malEngines.join(", ") : "✅ نظيف"}`;
+    }
+    return ctx.reply(reply, { parse_mode: "Markdown" });
+  }
+
+  if (mode === "vt_domain") {
+    delete DB.state[uid];
+    await ctx.replyWithChatAction("typing");
+    const result = await vtScanDomain(text);
+    let reply;
+    if (!result) reply = "❌ تعذر الفحص.";
+    else {
+      const mal = result.stats.malicious || 0;
+      const total = Object.values(result.stats).reduce((a, b) => a + b, 0);
+      reply = `🌐 *فحص الدومين*\n\n🔗 \`${text}\`\n🛡 الخبيثة: ${mal}/${total}\n📅 الإنشاء: ${result.created}`;
+    }
+    return ctx.reply(reply, { parse_mode: "Markdown" });
+  }
+
+  if (mode === "vt_ip") {
+    delete DB.state[uid];
+    await ctx.replyWithChatAction("typing");
+    const result = await vtScanIp(text);
+    let reply;
+    if (!result) reply = "❌ تعذر الفحص.";
+    else {
+      const mal = result.stats.malicious || 0;
+      const total = Object.values(result.stats).reduce((a, b) => a + b, 0);
+      reply = `🖥 *فحص IP*\n\`${text}\`\n🛡 الخبيثة: ${mal}/${total}\n🌍 الدولة: ${result.country}`;
+    }
+    return ctx.reply(reply, { parse_mode: "Markdown" });
+  }
+
+  // --- تغيير بيانات الحساب ---
+  if (mode === "acc_email") {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply("❌ صيغة بريد غير صالحة.");
+    DB.users[uid].accountEmail = text;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم تغيير بريدك.", mainKb());
+  }
+
+  if (mode === "acc_pass") {
+    if (text.length < 6) return ctx.reply("❌ كلمة السر أقل من 6 أحرف.");
+    DB.users[uid].accountPassword = text;
+    DB.users[uid].passwordHash = hashPass(text);
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم تغيير كلمة السر.", mainKb());
+  }
+
+  // --- إعدادات المطور (تغيير قيمة) ---
+  if (mode === "dev_setting") {
+    if (!isAdmin(uid)) return next();
+    const num = parseInt(text);
+    if (isNaN(num)) return ctx.reply("❌ أدخل رقماً صحيحاً.");
+    const { key } = state;
+    if (key === "ds_max") DB.settings.maxEmailsPerDay = num;
+    else if (key === "ds_cool") DB.settings.cooldown = num;
+    else if (key === "ds_watch") DB.settings.emailWatchMin = num;
+    else if (key === "ds_ref") DB.settings.refBonus = num;
+    else if (key === "ds_ai_limit") DB.settings.maxAiMsgsPerDay = num;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم التحديث.", devSettingsKb());
+  }
+
+  // --- إضافة كلمة مراقبة للقروب ---
+  if (mode === "add_watchword") {
+    const gid = state.gid;
+    if (!DB.groupWatchwords[gid]) DB.groupWatchwords[gid] = [];
+    DB.groupWatchwords[gid].push(text);
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply(`👁 تمت إضافة "${text}"`, Markup.inlineKeyboard([[Markup.button.callback("🔙", `grp_watchwords:${gid}`)]]));
+  }
+
+  // --- إضافة كلمة إساءة للقروب ---
+  if (mode === "add_badword") {
+    const gid = state.gid;
+    if (!DB.groupBadwords[gid]) DB.groupBadwords[gid] = [];
+    DB.groupBadwords[gid].push(text);
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply(`🚨 تمت إضافة "${text}"`, Markup.inlineKeyboard([[Markup.button.callback("🔙", `grp_badwords:${gid}`)]]));
+  }
+
+  // --- تعيين رسالة ترحيب ---
+  if (mode === "set_grp_welcome") {
+    const gid = state.gid;
+    DB.grpWelcome[gid] = text;
+    delete DB.state[uid];
+    saveDB();
+    // إرسال معاينة
+    const preview = text.replace("{name}", ctx.from.first_name).replace("{username}", ctx.from.username || ctx.from.first_name).replace("{group}", DB.groups[gid]?.title || "قروب");
+    ctx.replyWithMarkdown(`👋 *معاينة:*\n${preview}`);
+    return ctx.reply("✅ تم تعيين رسالة الترحيب.", Markup.inlineKeyboard([[Markup.button.callback("🔙", `group_view:${gid}`)]]));
+  }
+
+  // --- تعيين قواعد القروب ---
+  if (mode === "set_grp_rules") {
+    const gid = state.gid;
+    DB.grpRules[gid] = text;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم تعيين القواعد.", Markup.inlineKeyboard([[Markup.button.callback("🔙", `group_view:${gid}`)]]));
+  }
+
+  // --- رسالة جماعية / إذاعة ---
+  if (mode === "dev_broadcast") {
+    delete DB.state[uid];
+    let success = 0, fail = 0;
+    for (const id of Object.keys(DB.users)) {
+      try {
+        await bot.telegram.sendMessage(id, text, { parse_mode: "Markdown" });
+        success++;
+        await sleep(100); // تجنب الحظر
+      } catch { fail++; }
+    }
+    return ctx.reply(`📢 تم الإرسال إلى ${success} مستخدم.\n❌ فشل: ${fail}`);
+  }
+
+  // --- رسالة خاصة لمستخدم ---
+  if (mode === "msg_user") {
+    const tid = state.tid;
+    delete DB.state[uid];
+    try {
+      await bot.telegram.sendMessage(tid, `📨 رسالة من المطور:\n\n${text}`);
+      return ctx.reply("✅ تم الإرسال.");
+    } catch (e) { return ctx.reply("❌ فشل الإرسال."); }
+  }
+
+  // --- إضافة ملاحظة على مستخدم ---
+  if (mode === "add_user_note") {
+    const tid = state.tid;
+    DB.userNotes[tid] = text;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تمت إضافة الملاحظة.", Markup.inlineKeyboard([[Markup.button.callback("🔙", `dev_view_user:${tid}`)]]));
+  }
+
+  // --- إرسال رسالة للقروب (من لوحة القروب) ---
+  if (mode === "msg_group") {
+    const gid = state.gid;
+    delete DB.state[uid];
+    try {
+      await bot.telegram.sendMessage(gid, text);
+      return ctx.reply("✅ تم الإرسال للقروب.");
+    } catch (e) { return ctx.reply("❌ فشل الإرسال."); }
+  }
+
+  // --- بحث عن عضو ---
+  if (mode === "dev_search_user") {
+    delete DB.state[uid];
+    const results = Object.entries(DB.users).filter(([id, u]) => {
+      const s = text.toLowerCase();
+      return String(id).includes(s) || (u.name && u.name.toLowerCase().includes(s)) || (u.username && u.username.toLowerCase().includes(s));
+    }).slice(0, 10);
+    if (!results.length) return ctx.reply("🔍 لا توجد نتائج.");
+    let txt = `🔍 *نتائج البحث:*\n\n`;
+    results.forEach(([id, u]) => {
+      txt += `👤 *${u.name}* [\`${id}\`]\n@${u.username || "—"}\n\n`;
+    });
+    return ctx.reply(txt, { parse_mode: "Markdown" });
+  }
+
+  // --- تخصيص اسم البوت ---
+  if (mode === "dev_customize_name") {
+    DB.settings.botName = text;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply(`✅ تم تغيير اسم البوت إلى: ${text}`);
+  }
+
+  // --- تخصيص رسالة الترحيب العامة ---
+  if (mode === "dev_customize_welcome") {
+    DB.settings.welcomeMsg = text;
+    delete DB.state[uid];
+    saveDB();
+    return ctx.reply("✅ تم تغيير رسالة الترحيب.");
+  }
+
+  // --- إذا لم يتعرف على الوضع، يكمل للوسيط التالي ---
+  return next();
+});
+});
+
 bot.on("document", async (ctx, next) => {
   const uid = ctx.from?.id;
   if (!uid) return next();
