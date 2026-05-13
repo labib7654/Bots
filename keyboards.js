@@ -1,6 +1,5 @@
 const { Markup } = require('telegraf');
 
-// القائمة الرئيسية
 function mainMenu(isAdmin = false) {
   const buttons = [
     [Markup.button.callback('🛒 الخدمات', 'services')],
@@ -11,14 +10,12 @@ function mainMenu(isAdmin = false) {
   return Markup.inlineKeyboard(buttons);
 }
 
-// قائمة الفئات الرئيسية (يتم توليدها ديناميكياً لاحقاً)
 function categoriesMenu(categories) {
   const buttons = categories.map(cat => [Markup.button.callback(cat, `category_${cat}`)]);
   buttons.push([Markup.button.callback('🔙 رجوع للقائمة', 'back_main')]);
   return Markup.inlineKeyboard(buttons);
 }
 
-// قائمة الخدمات داخل فئة
 function servicesMenu(services) {
   const buttons = services.map(s => [
     Markup.button.callback(`${s.name_ar} - ${s.price}$`, `service_${s.id}`)
@@ -27,7 +24,6 @@ function servicesMenu(services) {
   return Markup.inlineKeyboard(buttons);
 }
 
-// لوحة اختيار العملة للشحن
 function currencyMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('💵 USD', 'recharge_USD')],
@@ -37,11 +33,9 @@ function currencyMenu() {
   ]);
 }
 
-// لوحة الإدارة
 function adminPanel() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('➕ إضافة خدمة', 'admin_add_service')],
-    [Markup.button.callback('✏️ تعديل خدمة', 'admin_edit_service')],
     [Markup.button.callback('🔄 تفعيل/تعطيل خدمة', 'admin_toggle_service')],
     [Markup.button.callback('📦 قائمة الطلبات', 'admin_orders')],
     [Markup.button.callback('💸 إضافة رصيد لمستخدم', 'admin_add_balance')],
@@ -52,7 +46,6 @@ function adminPanel() {
   ]);
 }
 
-// أزرار تأكيد / رفض للشحن
 function rechargeApprove(requestId) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('✅ قبول', `approve_recharge_${requestId}`),
