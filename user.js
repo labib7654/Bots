@@ -131,15 +131,25 @@ const rechargeWizard = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
+    const caption =
+      `📥 طلب شحن جديد:\n` +
+      `المستخدم: ${ctx.from.first_name || userId} (ID: ${userId})\n` +
+      `المبلغ: ${amount} ${currency}\n` +
+      `رقم الطلب: ${reqId}`;
+
     try {
-      await ctx.telegram.sendMessage(
-        adminId,
-        `📥 طلب شحن جديد:\n` +
-        `المستخدم: ${ctx.from.first_name || userId} (ID: ${userId})\n` +
-        `المبلغ: ${amount} ${currency}\n` +
-        `رقم الطلب: ${reqId}`,
-        kb.rechargeApprove(reqId)
-      );
+      if (ctx.message && ctx.message.photo) {
+        // المستخدم أرسل صورة إيصال
+        const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+        const approveMarkup = kb.rechargeApprove(reqId);
+        await ctx.telegram.sendPhoto(adminId, fileId, {
+          caption,
+          reply_markup: approveMarkup.reply_markup
+        });
+      } else {
+        // المستخدم كتب "تخطي" أو أرسل نصاً
+        await ctx.telegram.sendMessage(adminId, caption, kb.rechargeApprove(reqId));
+      }
     } catch (e) {
       console.error('فشل إرسال إشعار للأدمن:', e.message);
     }

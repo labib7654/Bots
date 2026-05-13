@@ -165,9 +165,15 @@ function setupAdmin(bot) {
   bot.action(/reject_recharge_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('غير مصرح');
     const reqId = ctx.match[1];
+    const req = await db.getRechargeById(reqId);
     await db.rejectRecharge(reqId);
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply('❌ تم رفض طلب الشحن.');
+    if (req) {
+      try {
+        await ctx.telegram.sendMessage(req.user_id, `❌ تم رفض طلب شحن رصيدك بمبلغ ${req.amount} ${req.currency}. يرجى التواصل مع الدعم.`);
+      } catch (e) {}
+    }
   });
 
   // ========================
@@ -186,6 +192,7 @@ function setupAdmin(bot) {
       const users = await db.getAllUsers();
       let sent = 0;
       for (const user of users) {
+        if (user.id === ADMIN_ID) continue;
         try {
           await ctx.telegram.copyMessage(user.id, ctx.chat.id, ctx.message.message_id);
           sent++;

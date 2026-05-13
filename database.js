@@ -2,7 +2,7 @@ const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 
-const dbPath = path.resolve('/tmp', 'followzone.db');
+const dbPath = path.resolve(__dirname, 'data', 'followzone.db');
 let db;
 
 // حفظ قاعدة البيانات إلى الملف
@@ -15,6 +15,8 @@ function saveDB() {
 // تحميل قاعدة البيانات من الملف أو إنشاء جديدة
 async function loadDB() {
   const SQL = await initSqlJs();
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (fs.existsSync(dbPath)) {
     const fileBuffer = fs.readFileSync(dbPath);
     db = new SQL.Database(fileBuffer);
@@ -127,6 +129,7 @@ async function initDB() {
     const stmt = db.prepare('INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)');
     services.forEach(s => stmt.run(s));
     stmt.free();
+    saveDB();
   }
   saveDB();
 }

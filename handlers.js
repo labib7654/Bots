@@ -9,6 +9,10 @@ const stage = new Scenes.Stage([orderWizard, rechargeWizard]);
 // ------------------ Middleware التحقق ------------------
 async function verificationMiddleware(ctx, next) {
   if (!ctx.from) return next();
+
+  // الأدمن لا يحتاج للتحقق
+  if (ctx.from.id === parseInt(process.env.ADMIN_ID)) return next();
+
   const user = await db.getUser(ctx.from.id);
 
   // إذا كان المستخدم محققاً بالفعل نكمل
@@ -118,9 +122,14 @@ async function myOrders(ctx) {
     return ctx.editMessageText('📭 ليس لديك أي طلبات بعد.', kb.mainMenu());
   }
   let text = '📋 طلباتك:\n\n';
-  orders.forEach(o => {
-    text += `🔹 #${o.id} | ${o.service_name}\n   الحالة: ${o.status} | السعر: ${o.price}$\n   الرابط: ${o.link}\n\n`;
-  });
+  for (const o of orders) {
+    const line = `🔹 #${o.id} | ${o.service_name}\n   الحالة: ${o.status} | السعر: ${o.price}$\n   الرابط: ${o.link}\n\n`;
+    if ((text + line).length > 3800) {
+      text += '... وطلبات أخرى. استخدم لوحة التحكم لعرض الكل.';
+      break;
+    }
+    text += line;
+  }
   await ctx.editMessageText(text, kb.mainMenu());
 }
 
