@@ -179,10 +179,11 @@ function setupAdmin(bot) {
   // ========================
   // معالج النصوص للإجراءات المعلقة (بث، إضافة خدمة، إضافة رصيد)
   // ========================
-  bot.on('text', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
+  bot.use(async (ctx, next) => {
+    if (!ctx.message || !ctx.message.text) return next();
+    if (ctx.from.id !== ADMIN_ID) return next();
     const pending = adminPending.get(ADMIN_ID);
-    if (!pending) return;
+    if (!pending) return next();
 
     // نستدعي الدالة المناسبة بناءً على نوع العملية المعلقة
     const text = ctx.message.text.trim();
@@ -239,13 +240,6 @@ function setupAdmin(bot) {
     }
   });
 
-  // ========================
-  // زر الرجوع العام (للإدارة)
-  // ========================
-  bot.action('back_main', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return; // يُترك للمستخدم العادي في handlers.js
-    // يفضل هنا عدم التعارض مع handlers، سنتركها للـ handlers العامة
-  });
 }
 
 module.exports = { setupAdmin };
