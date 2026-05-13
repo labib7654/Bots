@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: telegram-store-bot
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: BOT_TOKEN
+        value: 7243808108:AAFxlT-1HQ6twyVewzWqgdEgXd0EK_j4o5Y
+      - key: DEVELOPER_ID
+        value: 6965739282
+      - key: PORT
+        value: 3000
+    healthCheckPath: /health
