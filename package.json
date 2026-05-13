@@ -1,14 +1,14 @@
 {
   "name": "followzone-bot",
-  "version": "2.0.0",
-  "description": "Telegram bot for Follow Zone services",
+  "version": "2.1.0",
+  "description": "Follow Zone Bot - using sql.js for Render",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "telegraf": "^4.17.0",
-    "sqlite3": "^5.1.7",
+    "sql.js": "^1.10.0",
     "dotenv": "^16.4.5"
   }
 }

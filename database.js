@@ -1,293 +1,205 @@
-const sqlite3 = require('sqlite3').verbose();
+const initSqlJs = require('sql.js');
+const fs = require('fs');
 const path = require('path');
 
-// استخدام /tmp لتجنب ضياع البيانات على Render
 const dbPath = path.resolve('/tmp', 'followzone.db');
-const db = new sqlite3.Database(dbPath);
+let db;
 
-// ========== تهيئة الجداول ==========
-function initDB() {
-  db.serialize(() => {
-    // المستخدمين
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY,
-      username TEXT,
-      first_name TEXT,
-      balance REAL DEFAULT 0,
-      currency TEXT DEFAULT 'USD',
-      referrer_id INTEGER,
-      join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-      is_verified INTEGER DEFAULT 0
-    )`);
-
-    // الطلبات
-    db.run(`CREATE TABLE IF NOT EXISTS orders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      service_id INTEGER,
-      service_name TEXT,
-      link TEXT,
-      price REAL,
-      status TEXT DEFAULT 'قيد التنفيذ',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // الخدمات
-    db.run(`CREATE TABLE IF NOT EXISTS services (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name_ar TEXT,
-      name_en TEXT,
-      parent_category TEXT,
-      price REAL,
-      is_active INTEGER DEFAULT 1
-    )`);
-
-    // طلبات الشحن
-    db.run(`CREATE TABLE IF NOT EXISTS recharge_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      amount REAL,
-      currency TEXT,
-      status TEXT DEFAULT 'معلق',
-      receipt_message_id INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // سجل العمليات
-    db.run(`CREATE TABLE IF NOT EXISTS activity_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      action TEXT,
-      details TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // إدراج خدمات افتراضية إن كانت الجداول فارغة
-    db.get(`SELECT COUNT(*) as count FROM services`, (err, row) => {
-      if (err || row.count > 0) return;
-      const defaultServices = [
-        { name_ar: 'متابعين انستقرام', name_en: 'Instagram Followers', parent: 'انستقرام', price: 5 },
-        { name_ar: 'لايكات انستقرام', name_en: 'Instagram Likes', parent: 'انستقرام', price: 3 },
-        { name_ar: 'مشاهدات انستقرام', name_en: 'Instagram Views', parent: 'انستقرام', price: 2 },
-        { name_ar: 'متابعين تيك توك', name_en: 'TikTok Followers', parent: 'تيك توك', price: 6 },
-        { name_ar: 'لايكات تيك توك', name_en: 'TikTok Likes', parent: 'تيك توك', price: 4 },
-        { name_ar: 'مشاهدات تيك توك', name_en: 'TikTok Views', parent: 'تيك توك', price: 2.5 },
-        { name_ar: 'متابعين فيسبوك', name_en: 'Facebook Followers', parent: 'فيسبوك', price: 4 },
-        { name_ar: 'لايكات فيسبوك', name_en: 'Facebook Likes', parent: 'فيسبوك', price: 2 },
-        { name_ar: 'مشتركين تيليجرام', name_en: 'Telegram Members', parent: 'تيليجرام', price: 7 },
-        { name_ar: 'مشاهدات تيليجرام', name_en: 'Telegram Views', parent: 'تيليجرام', price: 3 },
-        { name_ar: 'اشتراك شات جي بي تي', name_en: 'ChatGPT Subscription', parent: 'ChatGPT', price: 15 },
-        { name_ar: 'اشتراك تيليجرام بريميوم', name_en: 'Telegram Premium', parent: 'Telegram Premium', price: 20 }
-      ];
-      const stmt = db.prepare(`INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)`);
-      defaultServices.forEach(s => stmt.run(s.name_ar, s.name_en, s.parent, s.price));
-      stmt.finalize();
-    });
-  });
+// حفظ قاعدة البيانات إلى الملف
+function saveDB() {
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(dbPath, buffer);
 }
 
-// ========== دوال المستخدمين ==========
-function getUser(id) {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT * FROM users WHERE id = ?`, [id], (err, row) => err ? reject(err) : resolve(row));
-  });
+// تحميل قاعدة البيانات من الملف أو إنشاء جديدة
+async function loadDB() {
+  const SQL = await initSqlJs();
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+  }
 }
 
+// دوال مساعدة
+function run(sql, params = []) {
+  db.run(sql, params);
+  saveDB();
+}
+
+function get(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  if (stmt.step()) {
+    const cols = stmt.getColumnNames();
+    const values = stmt.get();
+    const row = {};
+    cols.forEach((col, i) => row[col] = values[i]);
+    stmt.free();
+    return row;
+  }
+  stmt.free();
+  return null;
+}
+
+function all(sql, params = []) {
+  const rows = [];
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  while (stmt.step()) {
+    const cols = stmt.getColumnNames();
+    const values = stmt.get();
+    const row = {};
+    cols.forEach((col, i) => row[col] = values[i]);
+    rows.push(row);
+  }
+  stmt.free();
+  return rows;
+}
+
+// ====== التهيئة وإنشاء الجداول ======
+async function initDB() {
+  await loadDB();
+  run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
+    balance REAL DEFAULT 0,
+    currency TEXT DEFAULT 'USD',
+    referrer_id INTEGER,
+    join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_verified INTEGER DEFAULT 0
+  )`);
+  run(`CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    service_id INTEGER,
+    service_name TEXT,
+    link TEXT,
+    price REAL,
+    status TEXT DEFAULT 'قيد التنفيذ',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  run(`CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name_ar TEXT,
+    name_en TEXT,
+    parent_category TEXT,
+    price REAL,
+    is_active INTEGER DEFAULT 1
+  )`);
+  run(`CREATE TABLE IF NOT EXISTS recharge_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount REAL,
+    currency TEXT,
+    status TEXT DEFAULT 'معلق',
+    receipt_message_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  run(`CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    action TEXT,
+    details TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // إضافة خدمات افتراضية إذا كانت فارغة
+  const countRow = get('SELECT COUNT(*) as count FROM services');
+  if (countRow.count === 0) {
+    const services = [
+      ['متابعين انستقرام', 'Instagram Followers', 'انستقرام', 5],
+      ['لايكات انستقرام', 'Instagram Likes', 'انستقرام', 3],
+      ['مشاهدات انستقرام', 'Instagram Views', 'انستقرام', 2],
+      ['متابعين تيك توك', 'TikTok Followers', 'تيك توك', 6],
+      ['لايكات تيك توك', 'TikTok Likes', 'تيك توك', 4],
+      ['مشاهدات تيك توك', 'TikTok Views', 'تيك توك', 2.5],
+      ['متابعين فيسبوك', 'Facebook Followers', 'فيسبوك', 4],
+      ['لايكات فيسبوك', 'Facebook Likes', 'فيسبوك', 2],
+      ['مشتركين تيليجرام', 'Telegram Members', 'تيليجرام', 7],
+      ['مشاهدات تيليجرام', 'Telegram Views', 'تيليجرام', 3],
+      ['اشتراك شات جي بي تي', 'ChatGPT Subscription', 'ChatGPT', 15],
+      ['اشتراك تيليجرام بريميوم', 'Telegram Premium', 'Telegram Premium', 20],
+    ];
+    const stmt = db.prepare('INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)');
+    services.forEach(s => stmt.run(s));
+    stmt.free();
+  }
+  saveDB();
+}
+
+// ====== دوال المستخدمين ======
+function getUser(id) { return Promise.resolve(get('SELECT * FROM users WHERE id = ?', [id])); }
 function addUser(id, username, first_name, referrer_id = null) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT OR IGNORE INTO users (id, username, first_name, referrer_id) VALUES (?, ?, ?, ?)`,
-      [id, username, first_name, referrer_id],
-      function (err) { err ? reject(err) : resolve(this.lastID); }
-    );
-  });
+  run('INSERT OR IGNORE INTO users (id, username, first_name, referrer_id) VALUES (?, ?, ?, ?)', [id, username, first_name, referrer_id]);
+  return Promise.resolve();
 }
-
 function updateBalance(id, amount) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE users SET balance = balance + ? WHERE id = ?`, [amount, id], (err) => err ? reject(err) : resolve());
-  });
+  run('UPDATE users SET balance = balance + ? WHERE id = ?', [amount, id]);
+  return Promise.resolve();
 }
-
 function setVerified(id) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE users SET is_verified = 1 WHERE id = ?`, [id], (err) => err ? reject(err) : resolve());
-  });
+  run('UPDATE users SET is_verified = 1 WHERE id = ?', [id]);
+  return Promise.resolve();
 }
+function getUsersCount() { return Promise.resolve(get('SELECT COUNT(*) as count FROM users').count); }
+function getAllUsers() { return Promise.resolve(all('SELECT id FROM users')); }
 
-function getUsersCount() {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT COUNT(*) as count FROM users`, (err, row) => err ? reject(err) : resolve(row.count));
-  });
-}
-
-function getAllUsers() {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT id FROM users`, (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
-// ========== دوال الخدمات ==========
-function getAllServices() {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM services`, (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
-function getServicesByCategory(category) {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM services WHERE parent_category = ? AND is_active = 1`, [category], (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
-function getServiceById(id) {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT * FROM services WHERE id = ?`, [id], (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
+// ====== دوال الخدمات ======
+function getAllServices() { return Promise.resolve(all('SELECT * FROM services')); }
+function getServicesByCategory(category) { return Promise.resolve(all('SELECT * FROM services WHERE parent_category = ? AND is_active = 1', [category])); }
+function getServiceById(id) { return Promise.resolve(get('SELECT * FROM services WHERE id = ?', [id])); }
 function addService(name_ar, name_en, parent_category, price) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)`,
-      [name_ar, name_en, parent_category, price],
-      function (err) { err ? reject(err) : resolve(this.lastID); }
-    );
-  });
+  run('INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)', [name_ar, name_en, parent_category, price]);
+  return Promise.resolve();
 }
-
 function toggleServiceActive(id, active) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE services SET is_active = ? WHERE id = ?`, [active ? 1 : 0, id], (err) => err ? reject(err) : resolve());
-  });
+  run('UPDATE services SET is_active = ? WHERE id = ?', [active ? 1 : 0, id]);
+  return Promise.resolve();
 }
 
-// ========== دوال الطلبات ==========
+// ====== دوال الطلبات ======
 function createOrder(user_id, service_id, service_name, link, price) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO orders (user_id, service_id, service_name, link, price) VALUES (?, ?, ?, ?, ?)`,
-      [user_id, service_id, service_name, link, price],
-      function (err) { err ? reject(err) : resolve(this.lastID); }
-    );
-  });
+  run('INSERT INTO orders (user_id, service_id, service_name, link, price) VALUES (?, ?, ?, ?, ?)', [user_id, service_id, service_name, link, price]);
+  const result = get('SELECT last_insert_rowid() as id');
+  return Promise.resolve(result.id);
 }
+function getOrdersByUser(user_id) { return Promise.resolve(all('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [user_id])); }
+function getAllOrders() { return Promise.resolve(all('SELECT * FROM orders ORDER BY created_at DESC')); }
+function updateOrderStatus(order_id, status) { run('UPDATE orders SET status = ? WHERE id = ?', [status, order_id]); return Promise.resolve(); }
+function getOrderById(order_id) { return Promise.resolve(get('SELECT * FROM orders WHERE id = ?', [order_id])); }
 
-function getOrdersByUser(user_id) {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC`, [user_id], (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
-function getAllOrders() {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM orders ORDER BY created_at DESC`, (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
-function updateOrderStatus(order_id, status) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE orders SET status = ? WHERE id = ?`, [status, order_id], (err) => err ? reject(err) : resolve());
-  });
-}
-
-function getOrderById(order_id) {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT * FROM orders WHERE id = ?`, [order_id], (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
-// ========== دوال الشحن ==========
+// ====== دوال الشحن ======
 function addRechargeRequest(user_id, amount, currency) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO recharge_requests (user_id, amount, currency) VALUES (?, ?, ?)`,
-      [user_id, amount, currency],
-      function (err) { err ? reject(err) : resolve(this.lastID); }
-    );
-  });
+  run('INSERT INTO recharge_requests (user_id, amount, currency) VALUES (?, ?, ?)', [user_id, amount, currency]);
+  const result = get('SELECT last_insert_rowid() as id');
+  return Promise.resolve(result.id);
 }
+function getRechargeById(request_id) { return Promise.resolve(get('SELECT * FROM recharge_requests WHERE id = ?', [request_id])); }
+function acceptRecharge(request_id) { run('UPDATE recharge_requests SET status = ? WHERE id = ?', ['مقبول', request_id]); return Promise.resolve(); }
+function rejectRecharge(request_id) { run('UPDATE recharge_requests SET status = ? WHERE id = ?', ['مرفوض', request_id]); return Promise.resolve(); }
 
-function getRechargeById(request_id) {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT * FROM recharge_requests WHERE id = ?`, [request_id], (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
-function acceptRecharge(request_id) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE recharge_requests SET status = 'مقبول' WHERE id = ?`, [request_id], (err) => err ? reject(err) : resolve());
-  });
-}
-
-function rejectRecharge(request_id) {
-  return new Promise((resolve, reject) => {
-    db.run(`UPDATE recharge_requests SET status = 'مرفوض' WHERE id = ?`, [request_id], (err) => err ? reject(err) : resolve());
-  });
-}
-
-// ========== دوال الإحصائيات والسجلات ==========
-function getTotalOrders() {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT COUNT(*) as count FROM orders`, (err, row) => err ? reject(err) : resolve(row.count));
-  });
-}
-
-function getTotalRevenue() {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT SUM(price) as total FROM orders`, (err, row) => err ? reject(err) : resolve(row.total || 0));
-  });
-}
-
-function getRecentLogs() {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10`, (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-
+// ====== دوال الإحصائيات ======
+function getTotalOrders() { return Promise.resolve(get('SELECT COUNT(*) as count FROM orders').count); }
+function getTotalRevenue() { return Promise.resolve(get('SELECT SUM(price) as total FROM orders').total || 0); }
+function getRecentLogs() { return Promise.resolve(all('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10')); }
 function addLog(user_id, action, details) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)`,
-      [user_id, action, details],
-      function (err) { err ? reject(err) : resolve(this.lastID); }
-    );
-  });
+  run('INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)', [user_id, action, details]);
+  return Promise.resolve();
 }
 
-// ========== دوال الإحالات ==========
-function getUserReferrals(user_id) {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT id, first_name FROM users WHERE referrer_id = ?`, [user_id], (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
+// ====== دوال الإحالات ======
+function getUserReferrals(user_id) { return Promise.resolve(all('SELECT id, first_name FROM users WHERE referrer_id = ?', [user_id])); }
 
-// ========== تصدير ==========
 module.exports = {
   initDB,
-  getUser,
-  addUser,
-  updateBalance,
-  setVerified,
-  getUsersCount,
-  getAllUsers,
-  getAllServices,
-  getServicesByCategory,
-  getServiceById,
-  addService,
-  toggleServiceActive,
-  createOrder,
-  getOrdersByUser,
-  getAllOrders,
-  updateOrderStatus,
-  getOrderById,
-  addRechargeRequest,
-  getRechargeById,
-  acceptRecharge,
-  rejectRecharge,
-  getTotalOrders,
-  getTotalRevenue,
-  getRecentLogs,
-  addLog,
+  getUser, addUser, updateBalance, setVerified, getUsersCount, getAllUsers,
+  getAllServices, getServicesByCategory, getServiceById, addService, toggleServiceActive,
+  createOrder, getOrdersByUser, getAllOrders, updateOrderStatus, getOrderById,
+  addRechargeRequest, getRechargeById, acceptRecharge, rejectRecharge,
+  getTotalOrders, getTotalRevenue, getRecentLogs, addLog,
   getUserReferrals,
 };

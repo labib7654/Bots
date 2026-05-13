@@ -4,53 +4,39 @@ const { initDB } = require('./database');
 const { setupAdmin } = require('./admin');
 const handlers = require('./handlers');
 
-// تهيئة قاعدة البيانات
-initDB();
+(async () => {
+  // انتظار تحميل قاعدة البيانات (sql.js غير متزامن)
+  await initDB();
 
-// إنشاء البوت
-const bot = new Telegraf(process.env.BOT_TOKEN);
+  const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// !important: session middleware قبل stage
-bot.use(session());
-bot.use(handlers.stage.middleware());
+  // Middleware
+  bot.use(session());
+  bot.use(handlers.stage.middleware());
+  bot.use(handlers.verificationMiddleware);
 
-// Middleware التحقق من الروبوت
-bot.use(handlers.verificationMiddleware);
+  // الأوامر
+  bot.start(handlers.startHandler);
+  bot.action('services', handlers.showCategories);
+  bot.action(/category_(.+)/, handlers.showServicesInCategory);
+  bot.action(/service_(\d+)/, handlers.chooseService);
+  bot.action('back_main', handlers.backMain);
+  bot.action('back_categories', handlers.backCategories);
+  bot.action('recharge', handlers.rechargeMenu);
+  bot.action(/recharge_(.+)/, handlers.rechargeCurrencyChosen);
+  bot.action('myorders', handlers.myOrders);
+  bot.action('account', handlers.account);
+  bot.action('referral', handlers.referral);
 
-// ============ الأوامر والإجراءات ============
+  // إدارة
+  setupAdmin(bot);
 
-// أمر البدء
-bot.start(handlers.startHandler);
+  // تشغيل
+  bot.launch()
+    .then(() => console.log('✅ Follow Zone Bot running...'))
+    .catch(err => console.error(err));
 
-// التنقل بين القوائم
-bot.action('services', handlers.showCategories);
-bot.action(/category_(.+)/, handlers.showServicesInCategory);
-bot.action(/service_(\d+)/, handlers.chooseService);
-bot.action('back_main', handlers.backMain);
-bot.action('back_categories', handlers.backCategories);
-
-// الشحن
-bot.action('recharge', handlers.rechargeMenu);
-bot.action(/recharge_(.+)/, handlers.rechargeCurrencyChosen);
-
-// طلباتي - حسابي - الإحالات
-bot.action('myorders', handlers.myOrders);
-bot.action('account', handlers.account);
-bot.action('referral', handlers.referral);
-
-// إعداد أوامر الأدمن
-setupAdmin(bot);
-
-// ============ تشغيل البوت ============
-bot.launch()
-  .then(() => {
-    console.log('✅ Follow Zone Bot is running...');
-    console.log(`🔗 Bot username: @${bot.botInfo?.username}`);
-  })
-  .catch((err) => {
-    console.error('❌ فشل تشغيل البوت:', err);
-  });
-
-// إيقاف آمن عند إنهاء العملية
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  // إيقاف آمن
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+})();
