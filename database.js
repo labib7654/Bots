@@ -1,12 +1,14 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-// استخدام /tmp لتجنب ضياع البيانات على Render المجاني
+// استخدام /tmp لتجنب ضياع البيانات على Render
 const dbPath = path.resolve('/tmp', 'followzone.db');
 const db = new sqlite3.Database(dbPath);
 
+// ========== تهيئة الجداول ==========
 function initDB() {
   db.serialize(() => {
+    // المستخدمين
     db.run(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY,
       username TEXT,
@@ -18,6 +20,7 @@ function initDB() {
       is_verified INTEGER DEFAULT 0
     )`);
 
+    // الطلبات
     db.run(`CREATE TABLE IF NOT EXISTS orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -29,6 +32,7 @@ function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
+    // الخدمات
     db.run(`CREATE TABLE IF NOT EXISTS services (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name_ar TEXT,
@@ -38,6 +42,7 @@ function initDB() {
       is_active INTEGER DEFAULT 1
     )`);
 
+    // طلبات الشحن
     db.run(`CREATE TABLE IF NOT EXISTS recharge_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -48,6 +53,7 @@ function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
+    // سجل العمليات
     db.run(`CREATE TABLE IF NOT EXISTS activity_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -71,7 +77,7 @@ function initDB() {
         { name_ar: 'مشتركين تيليجرام', name_en: 'Telegram Members', parent: 'تيليجرام', price: 7 },
         { name_ar: 'مشاهدات تيليجرام', name_en: 'Telegram Views', parent: 'تيليجرام', price: 3 },
         { name_ar: 'اشتراك شات جي بي تي', name_en: 'ChatGPT Subscription', parent: 'ChatGPT', price: 15 },
-        { name_ar: 'اشتراك تيليجرام بريميوم', name_en: 'Telegram Premium', parent: 'Telegram Premium', price: 20 },
+        { name_ar: 'اشتراك تيليجرام بريميوم', name_en: 'Telegram Premium', parent: 'Telegram Premium', price: 20 }
       ];
       const stmt = db.prepare(`INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)`);
       defaultServices.forEach(s => stmt.run(s.name_ar, s.name_en, s.parent, s.price));
@@ -80,7 +86,7 @@ function initDB() {
   });
 }
 
-// ============ دوال المستخدمين ============
+// ========== دوال المستخدمين ==========
 function getUser(id) {
   return new Promise((resolve, reject) => {
     db.get(`SELECT * FROM users WHERE id = ?`, [id], (err, row) => err ? reject(err) : resolve(row));
@@ -89,7 +95,8 @@ function getUser(id) {
 
 function addUser(id, username, first_name, referrer_id = null) {
   return new Promise((resolve, reject) => {
-    db.run(`INSERT OR IGNORE INTO users (id, username, first_name, referrer_id) VALUES (?, ?, ?, ?)`,
+    db.run(
+      `INSERT OR IGNORE INTO users (id, username, first_name, referrer_id) VALUES (?, ?, ?, ?)`,
       [id, username, first_name, referrer_id],
       function (err) { err ? reject(err) : resolve(this.lastID); }
     );
@@ -120,7 +127,7 @@ function getAllUsers() {
   });
 }
 
-// ============ دوال الخدمات ============
+// ========== دوال الخدمات ==========
 function getAllServices() {
   return new Promise((resolve, reject) => {
     db.all(`SELECT * FROM services`, (err, rows) => err ? reject(err) : resolve(rows));
@@ -141,8 +148,10 @@ function getServiceById(id) {
 
 function addService(name_ar, name_en, parent_category, price) {
   return new Promise((resolve, reject) => {
-    db.run(`INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)`,
-      [name_ar, name_en, parent_category, price], function (err) { err ? reject(err) : resolve(this.lastID); }
+    db.run(
+      `INSERT INTO services (name_ar, name_en, parent_category, price) VALUES (?, ?, ?, ?)`,
+      [name_ar, name_en, parent_category, price],
+      function (err) { err ? reject(err) : resolve(this.lastID); }
     );
   });
 }
@@ -153,17 +162,13 @@ function toggleServiceActive(id, active) {
   });
 }
 
-function deleteService(id) {
-  return new Promise((resolve, reject) => {
-    db.run(`DELETE FROM services WHERE id = ?`, [id], (err) => err ? reject(err) : resolve());
-  });
-}
-
-// ============ دوال الطلبات ============
+// ========== دوال الطلبات ==========
 function createOrder(user_id, service_id, service_name, link, price) {
   return new Promise((resolve, reject) => {
-    db.run(`INSERT INTO orders (user_id, service_id, service_name, link, price) VALUES (?, ?, ?, ?, ?)`,
-      [user_id, service_id, service_name, link, price], function (err) { err ? reject(err) : resolve(this.lastID); }
+    db.run(
+      `INSERT INTO orders (user_id, service_id, service_name, link, price) VALUES (?, ?, ?, ?, ?)`,
+      [user_id, service_id, service_name, link, price],
+      function (err) { err ? reject(err) : resolve(this.lastID); }
     );
   });
 }
@@ -192,18 +197,20 @@ function getOrderById(order_id) {
   });
 }
 
-// ============ دوال الشحن ============
+// ========== دوال الشحن ==========
 function addRechargeRequest(user_id, amount, currency) {
   return new Promise((resolve, reject) => {
-    db.run(`INSERT INTO recharge_requests (user_id, amount, currency) VALUES (?, ?, ?)`,
-      [user_id, amount, currency], function (err) { err ? reject(err) : resolve(this.lastID); }
+    db.run(
+      `INSERT INTO recharge_requests (user_id, amount, currency) VALUES (?, ?, ?)`,
+      [user_id, amount, currency],
+      function (err) { err ? reject(err) : resolve(this.lastID); }
     );
   });
 }
 
-function getPendingRecharges() {
+function getRechargeById(request_id) {
   return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM recharge_requests WHERE status = 'معلق'`, (err, rows) => err ? reject(err) : resolve(rows));
+    db.get(`SELECT * FROM recharge_requests WHERE id = ?`, [request_id], (err, row) => err ? reject(err) : resolve(row));
   });
 }
 
@@ -219,13 +226,7 @@ function rejectRecharge(request_id) {
   });
 }
 
-function getRechargeById(request_id) {
-  return new Promise((resolve, reject) => {
-    db.get(`SELECT * FROM recharge_requests WHERE id = ?`, [request_id], (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
-// ============ دوال الإحصائيات ============
+// ========== دوال الإحصائيات والسجلات ==========
 function getTotalOrders() {
   return new Promise((resolve, reject) => {
     db.get(`SELECT COUNT(*) as count FROM orders`, (err, row) => err ? reject(err) : resolve(row.count));
@@ -244,13 +245,24 @@ function getRecentLogs() {
   });
 }
 
-// ============ دوال الإحالات ============
+function addLog(user_id, action, details) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)`,
+      [user_id, action, details],
+      function (err) { err ? reject(err) : resolve(this.lastID); }
+    );
+  });
+}
+
+// ========== دوال الإحالات ==========
 function getUserReferrals(user_id) {
   return new Promise((resolve, reject) => {
     db.all(`SELECT id, first_name FROM users WHERE referrer_id = ?`, [user_id], (err, rows) => err ? reject(err) : resolve(rows));
   });
 }
 
+// ========== تصدير ==========
 module.exports = {
   initDB,
   getUser,
@@ -264,19 +276,18 @@ module.exports = {
   getServiceById,
   addService,
   toggleServiceActive,
-  deleteService,
   createOrder,
   getOrdersByUser,
   getAllOrders,
   updateOrderStatus,
   getOrderById,
   addRechargeRequest,
-  getPendingRecharges,
+  getRechargeById,
   acceptRecharge,
   rejectRecharge,
-  getRechargeById,
   getTotalOrders,
   getTotalRevenue,
   getRecentLogs,
+  addLog,
   getUserReferrals,
 };
