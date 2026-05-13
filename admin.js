@@ -1,31 +1,13 @@
+const { Markup } = require('telegraf');
 const db = require('./database');
 const kb = require('./keyboards');
 
 function setupAdmin(bot) {
   const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 
-  // لوحة الإدارة
   bot.action('admin_panel', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('غير مصرح');
     await ctx.editMessageText('⚙️ لوحة إدارة Follow Zone', kb.adminPanel());
-  });
-
-  // ============ إضافة خدمة ============
-  bot.action('admin_add_service', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    await ctx.reply('أرسل بيانات الخدمة بالشكل:\n`الاسم_عربي | الاسم_انجليزي | الفئة_الأم | السعر`');
-    // ننتظر رد المستخدم
-    bot.on('text', async (msgCtx) => {
-      if (msgCtx.from.id !== ADMIN_ID) return;
-      const text = msgCtx.message.text;
-      const parts = text.split('|').map(s => s.trim());
-      if (parts.length !== 4) return msgCtx.reply('صيغة خاطئة، حاول مرة أخرى.');
-      const [name_ar, name_en, parent, price] = parts;
-      const priceNum = parseFloat(price);
-      if (isNaN(priceNum)) return msgCtx.reply('السعر غير صحيح.');
-      await db.addService(name_ar, name_en, parent, priceNum);
-      await msgCtx.reply('✅ تمت إضافة الخدمة بنجاح.');
-    }, { once: true });
   });
 
   // ============ تفعيل/تعطيل خدمة ============
@@ -45,7 +27,6 @@ function setupAdmin(bot) {
     const service = await db.getServiceById(serviceId);
     await db.toggleServiceActive(serviceId, !service.is_active);
     await ctx.answerCbQuery(`تم ${service.is_active ? 'تعطيل' : 'تفعيل'} الخدمة.`);
-    // إعادة عرض القائمة
   });
 
   // ============ قائمة الطلبات ============
@@ -69,26 +50,10 @@ function setupAdmin(bot) {
     const orderId = ctx.match[1];
     await db.updateOrderStatus(orderId, 'مكتمل');
     await ctx.answerCbQuery('تم تحديث الطلب إلى مكتمل.');
-    // إشعار المستخدم
     const order = await db.getOrderById(orderId);
     try {
       await ctx.telegram.sendMessage(order.user_id, `✅ تم إتمام طلبك رقم ${orderId} بنجاح.`);
     } catch (e) {}
-  });
-
-  // ============ إضافة رصيد ============
-  bot.action('admin_add_balance', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    await ctx.reply('أرسل معرف المستخدم ثم المبلغ مفصولين بمسافة:\nمثال: `123456 10`');
-    bot.on('text', async (msgCtx) => {
-      if (msgCtx.from.id !== ADMIN_ID) return;
-      const [uid, amt] = msgCtx.message.text.split(' ');
-      const userId = parseInt(uid);
-      const amount = parseFloat(amt);
-      if (isNaN(userId) || isNaN(amount)) return msgCtx.reply('مدخلات غير صالحة.');
-      await db.updateBalance(userId, amount);
-      await msgCtx.reply(`✅ تم إضافة ${amount}$ إلى المستخدم ${userId}`);
-    }, { once: true });
   });
 
   // ============ إحصائيات ============
@@ -103,23 +68,33 @@ function setupAdmin(bot) {
   // ============ بث ============
   bot.action('admin_broadcast', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    await ctx.reply('أرسل الرسالة التي تريد إرسالها لجميع المستخدمين (نص، صورة، إلخ):');
-    bot.on('message', async (msgCtx) => {
+    await ctx.reply('أرسل الرسالة التي تريد إرسالها لجميع المستخدمين:');
+    // ننتظر رسالة واحدة من الأدمن فقط
+    const listener = async (msgCtx) => {
       if (msgCtx.from.id !== ADMIN_ID) return;
-      // جلب جميع المستخدمين
-      db.db.all(`SELECT id FROM users`, async (err, rows) => {
-        if (err) return;
-        for (const user of rows) {
-          try {
-            await ctx.telegram.copyMessage(user.id, msgCtx.chat.id, msgCtx.message.message_id);
-          } catch (e) {}
-        }
-        await msgCtx.reply('✅ تم الإرسال.');
-      });
-    }, { once: true });
+      bot.removeListener('message', listener); // إزالة المستمع بعد أول رسالة
+      const users = await db.getAllUsers();
+      for (const user of users) {
+        try {
+          await ctx.telegram.copyMessage(user.id, msgCtx.chat.id, msgCtx.message.message_id);
+        } catch (e) {}
+      }
+      await msgCtx.reply('✅ تم الإرسال.');
+    };
+    bot.on('message', listener);
   });
 
-  // قبول شحن
+  // ============ سجل العمليات ============
+  bot.action('admin_log', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const rows = await db.getRecentLogs();
+    if (rows.length === 0) return ctx.reply('لا توجد سجلات.');
+    let text = '📜 سجل العمليات:\n\n';
+    rows.forEach(r => { text += `[${r.created_at}] ${r.action}: ${r.details}\n`; });
+    await ctx.reply(text);
+  });
+
+  // ============ قبول / رفض شحن ============
   bot.action(/approve_recharge_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('غير مصرح');
     const reqId = ctx.match[1];
@@ -134,25 +109,12 @@ function setupAdmin(bot) {
     } catch (e) {}
   });
 
-  // رفض شحن (اختياري)
   bot.action(/reject_recharge_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const reqId = ctx.match[1];
-    await db.run(`UPDATE recharge_requests SET status = 'مرفوض' WHERE id = ?`, [reqId]);
+    await db.rejectRecharge(reqId);
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply('تم رفض الطلب.');
-  });
-
-  // سجل العمليات بسيط (يمكن تطويره)
-  bot.action('admin_log', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    // نعرض آخر 10 سجلات
-    db.db.all(`SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10`, (err, rows) => {
-      if (err || rows.length === 0) return ctx.reply('لا توجد سجلات.');
-      let text = '📜 سجل العمليات:\n\n';
-      rows.forEach(r => { text += `[${r.created_at}] ${r.action}: ${r.details}\n`; });
-      ctx.reply(text);
-    });
   });
 }
 
