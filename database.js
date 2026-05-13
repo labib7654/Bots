@@ -2,63 +2,92 @@ const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 
-const dbPath = path.resolve(__dirname, 'data', 'followzone.db');
+// في Render المجاني الـ filesystem مؤقت - نحفظ في /tmp لأنه الأكثر ثباتاً أثناء الجلسة
+const dbPath = process.env.DB_PATH || path.resolve('/tmp', 'followzone.db');
 let db;
+let saveTimeout = null;
 
-// حفظ قاعدة البيانات إلى الملف
+// حفظ مؤجل لتجنب الكتابة المتكررة
 function saveDB() {
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    try {
+      const data = db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(dbPath, buffer);
+    } catch (err) {
+      console.error('خطأ في حفظ قاعدة البيانات:', err.message);
+    }
+  }, 500);
 }
 
 // تحميل قاعدة البيانات من الملف أو إنشاء جديدة
 async function loadDB() {
   const SQL = await initSqlJs();
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (fs.existsSync(dbPath)) {
-    const fileBuffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(fileBuffer);
+    try {
+      const fileBuffer = fs.readFileSync(dbPath);
+      db = new SQL.Database(fileBuffer);
+      console.log('تم تحميل قاعدة البيانات من:', dbPath);
+    } catch (err) {
+      console.error('ملف قاعدة البيانات تالف، سيتم إنشاء جديدة:', err.message);
+      db = new SQL.Database();
+    }
   } else {
     db = new SQL.Database();
+    console.log('تم إنشاء قاعدة بيانات جديدة');
   }
 }
 
 // دوال مساعدة
 function run(sql, params = []) {
-  db.run(sql, params);
-  saveDB();
+  try {
+    db.run(sql, params);
+    saveDB();
+  } catch (err) {
+    console.error('خطأ في run:', err.message, sql);
+    throw err;
+  }
 }
 
 function get(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const cols = stmt.getColumnNames();
-    const values = stmt.get();
-    const row = {};
-    cols.forEach((col, i) => row[col] = values[i]);
+  try {
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    if (stmt.step()) {
+      const cols = stmt.getColumnNames();
+      const values = stmt.get();
+      const row = {};
+      cols.forEach((col, i) => row[col] = values[i]);
+      stmt.free();
+      return row;
+    }
     stmt.free();
-    return row;
+    return null;
+  } catch (err) {
+    console.error('خطأ في get:', err.message, sql);
+    return null;
   }
-  stmt.free();
-  return null;
 }
 
 function all(sql, params = []) {
-  const rows = [];
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  while (stmt.step()) {
-    const cols = stmt.getColumnNames();
-    const values = stmt.get();
-    const row = {};
-    cols.forEach((col, i) => row[col] = values[i]);
-    rows.push(row);
+  try {
+    const rows = [];
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    while (stmt.step()) {
+      const cols = stmt.getColumnNames();
+      const values = stmt.get();
+      const row = {};
+      cols.forEach((col, i) => row[col] = values[i]);
+      rows.push(row);
+    }
+    stmt.free();
+    return rows;
+  } catch (err) {
+    console.error('خطأ في all:', err.message, sql);
+    return [];
   }
-  stmt.free();
-  return rows;
 }
 
 // ====== التهيئة وإنشاء الجداول ======
@@ -111,7 +140,7 @@ async function initDB() {
 
   // إضافة خدمات افتراضية إذا كانت فارغة
   const countRow = get('SELECT COUNT(*) as count FROM services');
-  if (countRow.count === 0) {
+  if (!countRow || countRow.count === 0) {
     const services = [
       ['متابعين انستقرام', 'Instagram Followers', 'انستقرام', 5],
       ['لايكات انستقرام', 'Instagram Likes', 'انستقرام', 3],
@@ -131,7 +160,6 @@ async function initDB() {
     stmt.free();
     saveDB();
   }
-  saveDB();
 }
 
 // ====== دوال المستخدمين ======
@@ -148,7 +176,10 @@ function setVerified(id) {
   run('UPDATE users SET is_verified = 1 WHERE id = ?', [id]);
   return Promise.resolve();
 }
-function getUsersCount() { return Promise.resolve(get('SELECT COUNT(*) as count FROM users').count); }
+function getUsersCount() {
+  const row = get('SELECT COUNT(*) as count FROM users');
+  return Promise.resolve(row ? row.count : 0);
+}
 function getAllUsers() { return Promise.resolve(all('SELECT id FROM users')); }
 
 // ====== دوال الخدمات ======
@@ -168,7 +199,7 @@ function toggleServiceActive(id, active) {
 function createOrder(user_id, service_id, service_name, link, price) {
   run('INSERT INTO orders (user_id, service_id, service_name, link, price) VALUES (?, ?, ?, ?, ?)', [user_id, service_id, service_name, link, price]);
   const result = get('SELECT last_insert_rowid() as id');
-  return Promise.resolve(result.id);
+  return Promise.resolve(result ? result.id : null);
 }
 function getOrdersByUser(user_id) { return Promise.resolve(all('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [user_id])); }
 function getAllOrders() { return Promise.resolve(all('SELECT * FROM orders ORDER BY created_at DESC')); }
@@ -179,15 +210,21 @@ function getOrderById(order_id) { return Promise.resolve(get('SELECT * FROM orde
 function addRechargeRequest(user_id, amount, currency) {
   run('INSERT INTO recharge_requests (user_id, amount, currency) VALUES (?, ?, ?)', [user_id, amount, currency]);
   const result = get('SELECT last_insert_rowid() as id');
-  return Promise.resolve(result.id);
+  return Promise.resolve(result ? result.id : null);
 }
 function getRechargeById(request_id) { return Promise.resolve(get('SELECT * FROM recharge_requests WHERE id = ?', [request_id])); }
 function acceptRecharge(request_id) { run('UPDATE recharge_requests SET status = ? WHERE id = ?', ['مقبول', request_id]); return Promise.resolve(); }
 function rejectRecharge(request_id) { run('UPDATE recharge_requests SET status = ? WHERE id = ?', ['مرفوض', request_id]); return Promise.resolve(); }
 
 // ====== دوال الإحصائيات ======
-function getTotalOrders() { return Promise.resolve(get('SELECT COUNT(*) as count FROM orders').count); }
-function getTotalRevenue() { return Promise.resolve(get('SELECT SUM(price) as total FROM orders').total || 0); }
+function getTotalOrders() {
+  const row = get('SELECT COUNT(*) as count FROM orders');
+  return Promise.resolve(row ? row.count : 0);
+}
+function getTotalRevenue() {
+  const row = get('SELECT SUM(price) as total FROM orders');
+  return Promise.resolve(row && row.total ? row.total : 0);
+}
 function getRecentLogs() { return Promise.resolve(all('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10')); }
 function addLog(user_id, action, details) {
   run('INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)', [user_id, action, details]);
